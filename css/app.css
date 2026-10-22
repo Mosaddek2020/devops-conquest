@@ -677,3 +677,13 @@ button { font: inherit; color: inherit; }
 div.k8s-warn { border: none; }
 .k8s-warn-msg { margin-top: 2px; overflow-wrap: anywhere; }
 .pill-bad { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); font-weight: 600; }
+.obs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.obs-panel { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--surface); min-width: 0; }
+.obs-ptitle { font-weight: 600; font-size: .84rem; margin-bottom: 4px; }
+.obs-dash-title { margin: 4px 0 0; font-size: .95rem; }
+.obs-chart { width: 100%; height: auto; display: block; }
+.obs-legend { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; font-size: .72rem; }
+.obs-legend li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.obs-legend i { width: 10px; height: 3px; border-radius: 2px; display: block; }
+.obs-legend span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.obs-err { color: var(--bad); font-size: .8rem; padding: 6px 0; overflow-wrap: anywhere; }

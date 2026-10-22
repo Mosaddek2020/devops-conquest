@@ -502,6 +502,58 @@ D['ansible-flow'] = () => {
   return figure(d, 'No agent to install: SSH plus Python on the target. Run the same playbook twice and the second run should report changed=0.');
 };
 
+
+// ---------- Realm 9: Observability ----------
+D['obs-pillars'] = () => {
+  const d = mk(720, 230, 'Metrics, logs and traces answer different questions; together they take you from "something is wrong" to "this is why"');
+  [['metrics', 'numbers over time', 'Is something wrong? How much, since when?', 'info'], ['logs', 'events with details', 'What exactly happened to this request?', 'warn'], ['traces', 'one request across services', 'Where did the time (or the error) go?', 'ok']].forEach(([t, sub, q, c], k) => {
+    d.box(20 + k * 235, 30, 210, 90, t, { sub, color: c, titleSize: 15 });
+    d.text(125 + k * 235, 145, q, { size: 11.5, color: 'muted' });
+    if (k) d.arrow(k * 235 + 2, 75, k * 235 + 16, 75, { color: 'text' });
+  });
+  d.text(360, 190, 'alert fires on a metric → filter logs for the failing route → open a trace_id from a log line', { size: 12.5 });
+  d.text(360, 212, 'Correlation (shared labels, trace IDs in logs) is what makes the three work as one.', { size: 12, color: 'muted' });
+  return figure(d, 'Monitoring tells you that something broke. Observability is being able to ask new questions about why, without shipping new code first.');
+};
+
+D['golden-signals'] = () => {
+  const d = mk(720, 200, 'The four golden signals for a service: latency, traffic, errors and saturation');
+  [['Latency', 'how long requests take\n(p50, p95, p99)', 'warn'], ['Traffic', 'how much demand\n(requests/second)', 'info'], ['Errors', 'how many fail\n(5xx ratio)', 'bad'], ['Saturation', 'how full the system is\n(CPU, memory, queues)', 'feat']].forEach(([t, sub, c], k) => d.box(16 + k * 176, 40, 160, 100, t, { sub, color: c, titleSize: 15, subSize: 11.5 }));
+  d.text(360, 180, 'RED for services (Rate, Errors, Duration) · USE for resources (Utilization, Saturation, Errors)', { size: 12.5, color: 'muted' });
+  return figure(d, 'If you can only watch four things about a service, watch these. Averages hide pain: look at high percentiles.');
+};
+
+D['prom-arch'] = () => {
+  const d = mk(720, 240, 'Prometheus pulls metrics from targets on a schedule, stores time series, evaluates rules and sends alerts to Alertmanager');
+  d.box(20, 30, 150, 50, 'app :3000/metrics', { color: 'main', titleSize: 12 });
+  d.box(20, 95, 150, 50, 'node_exporter :9100', { color: 'main', titleSize: 12 });
+  d.box(20, 160, 150, 50, 'prometheus :9090', { color: 'main', titleSize: 12 });
+  d.box(260, 70, 190, 100, 'Prometheus', { sub: 'scrape every 15s\nTSDB · PromQL\nrules → alerts', color: 'info', titleSize: 15, subSize: 11.5 });
+  d.arrow(256, 100, 174, 55, { color: 'info', label: 'pull', dy: -4, size: 11 });
+  d.arrow(256, 120, 174, 120, { color: 'info' });
+  d.arrow(256, 140, 174, 185, { color: 'info' });
+  d.box(540, 20, 160, 56, 'Grafana', { sub: 'dashboards', color: 'ok', titleSize: 13 });
+  d.box(540, 92, 160, 56, 'Alertmanager', { sub: 'group · route · silence', color: 'warn', titleSize: 13, subSize: 10.5 });
+  d.box(540, 164, 160, 56, '#oncall chat / pager', { color: 'bad', titleSize: 12 });
+  d.arrow(452, 95, 536, 50, { color: 'text', label: 'PromQL', dy: -4, size: 11 });
+  d.arrow(452, 125, 536, 120, { color: 'text', label: 'alerts', dy: -6, size: 11 });
+  d.arrow(620, 150, 620, 160, { color: 'text' });
+  return figure(d, 'Pull-based: if a target cannot be scraped, `up` becomes 0, which is itself one of your most important alerts.');
+};
+
+D['slo-budget'] = () => {
+  const d = mk(720, 220, 'An SLO turns reliability into a budget: 99.9% good requests over 30 days allows 0.1% to fail');
+  d.box(20, 40, 680, 46, '', { color: 'line' });
+  d.box(20, 40, 600, 46, '', { color: 'ok', fill: 'var(--ok-soft)' });
+  d.text(320, 69, '99.9% of requests succeed (SLO)', { weight: 700, size: 13 });
+  d.box(620, 40, 80, 46, '', { color: 'bad', fill: 'var(--bad-soft)' });
+  d.text(660, 69, 'budget', { size: 12, weight: 700, color: 'bad' });
+  d.text(360, 120, 'Error budget spent fast (high burn rate) → page someone now.', { size: 12.5 });
+  d.text(360, 144, 'Spent slowly → a ticket for this week. Budget gone → slow down releases, fix reliability.', { size: 12.5 });
+  d.text(360, 186, 'burn rate = error ratio ÷ (1 − SLO).  A burn rate of 14.4 for 1 hour spends 2% of a 30-day budget.', { size: 12, color: 'muted', font: 'mono' });
+  return figure(d, 'SLOs replace "is anything red?" with "are we spending reliability faster than we can afford?", which is what users actually feel.');
+};
+
 export function renderDiagram(name) {
   const fn = D[name];
   if (!fn) return h('div', { class: 'figure' }, `Missing diagram: ${name}`);

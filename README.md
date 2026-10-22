@@ -21,6 +21,7 @@ You unlock the next lesson by passing it.
 | 6 | Containers: Docker images, Dockerfiles, small safe images, volumes, networks, Compose, registries | 8 |
 | 7 | Kubernetes: desired state, debugging pods, Services and Ingress, config and Secrets, probes and resources, rollouts, HPA and StatefulSets | 8 |
 | 8 | Infrastructure as Code: Terraform (plans, state, drift, modules, safe changes) and Ansible (playbooks, templates, handlers, vault) | 8 |
+| 9 | Observability: golden signals, Prometheus, PromQL, dashboards, alerting, logs, traces, SLOs | 9 |
 
 ## How it works
 
@@ -31,11 +32,13 @@ You unlock the next lesson by passing it.
   (`k8s.js` controllers, scheduler, kubelet with probes and back-off, Services, Ingress, HPA,
   StatefulSets; `kubectl.js` the CLI), an AWS-like cloud (`cloud.js`: instances run cloud-init,
   security groups and VPC routes really filter traffic), Terraform (`hcl.js` parser/evaluator,
-  `terraform.js` plan/apply/state/backends, `tfproviders.js`), Ansible (`ansible.js`) and a
+  `terraform.js` plan/apply/state/backends, `tfproviders.js`), Ansible (`ansible.js`), observability (`obs.js`: traffic-driven app metrics, node_exporter,
+  Prometheus scraping/rules/alerts, Alertmanager into a team chat, LogQL logs, traces;
+  `promql.js` the query engine) and a
   simulated AI assistant (`ai`) whose scripted answers are sometimes wrong on purpose.
 - `js/content/rNN-*.js` defines each realm's labs (setup, tasks with checks and reference
   solutions) and quizzes; `content/<realm>/<lesson>.md` holds the lesson text.
-- `js/ui/` has the terminal, panels (System, Files, Network, GitHub, Docker, Cluster, Cloud), diagrams and
+- `js/ui/` has the terminal, panels (System, Files, Network, GitHub, Docker, Cluster, Cloud, Observe), diagrams and
   step-through replays; `js/views/` the pages, including the three.js map.
 
 ## Develop
@@ -45,5 +48,6 @@ node tools/build-content.mjs   # bundle lesson Markdown into js/content/text.js
 node tools/build.mjs           # build dist/
 node tests/labs.mjs            # every lab's reference solution passes, no premature passes
 node tests/quizzes.mjs         # quiz structure
+node tests/modules.mjs          # every module imports (catches what node --check misses)
 node tests/shell.mjs && node tests/ops.mjs && node tests/ci.mjs && node tests/docker.mjs
 ```

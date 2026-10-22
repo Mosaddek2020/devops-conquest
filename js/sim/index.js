@@ -15,6 +15,8 @@ import './k8s-lab.js';
 import './cloud.js';
 import './terraform.js';
 import './ansible.js';
+import './obs.js';
+import './obs-lab.js';
 import './iac-lab.js';
 import { wirePackages } from './packages.js';
 import { installSystemdTicker } from './systemd.js';

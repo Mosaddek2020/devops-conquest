@@ -319,7 +319,7 @@ def('systemctl', c => {
       });
       return code;
     }
-    case 'is-active': { const st = unitState(host, names[0]); if (!o['--quiet'] && !o['-q']) c.print(st.active); return st.active === 'active' ? 0 : 3; }
+    case 'is-active': { let code = 0; for (const n of names) { const st = unitState(host, n); if (!o['--quiet'] && !o['-q']) c.print(st.active); if (st.active !== 'active') code = 3; } return code; }
     case 'is-enabled': { const st = unitState(host, names[0]); c.print(findUnitFile(host, names[0]) ? (st.enabled ? 'enabled' : 'disabled') : 'not-found'); return st.enabled ? 0 : 1; }
     case 'is-failed': { const st = unitState(host, names[0]); c.print(st.active === 'failed' ? 'failed' : st.active); return st.active === 'failed' ? 0 : 1; }
     case 'cat': {

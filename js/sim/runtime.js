@@ -120,6 +120,7 @@ export class NodeApp {
     this.memMB = 48;
     this.cpu = 0.5;
     this.reqLog = /morgan\(|app\.use\(\s*\(req/.test(src);
+    this.instrumented = /prom-client/.test(src);
     this.parse();
   }
 
@@ -246,7 +247,24 @@ export class NodeApp {
   }
 
   handle(req) {
+    const res = this.handleInner(req);
+    // apps using prom-client count their own requests (served on /metrics)
+    if (this.instrumented && this.uni.obs && req.path !== '/metrics' && res && !res.error) {
+      const route = this.routes.find(r => r.method === req.method && this.match(r.path, req.path.replace(/\/+$/, '') || '/'))?.path || req.path;
+      const prof = this.uni.obs.profileFor(this.host, this.port)?.routes[route];
+      this.uni.obs.statsFor(this.host, this.port).add(req.method, route, String(res.status || 200), 1, prof && (res.status || 200) < 500 ? prof.p50 : 0.012);
+    }
+    return res;
+  }
+
+  handleInner(req) {
     const path = req.path.replace(/\/+$/, '') || '/';
+    if (path === '/metrics' && this.instrumented) {
+      const st = this.uni.obs ? this.uni.obs.statsFor(this.host, this.port) : null;
+      const proc = this.proc;
+      const extra = ['# TYPE process_resident_memory_bytes gauge', `process_resident_memory_bytes ${Math.round((proc?.mem || this.memMB) * 1048576)}`, '# TYPE process_cpu_seconds_total counter', `process_cpu_seconds_total ${((this.uni.time - (proc?.start || this.uni.time)) * (proc?.cpu || 0.3) / 10).toFixed(2)}`, '# TYPE nodejs_eventloop_lag_seconds gauge', `nodejs_eventloop_lag_seconds ${this.lagSeconds ?? 0.0021}`];
+      return { status: 200, headers: { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' }, body: st ? st.exposition(extra) : extra.join('\n') + '\n' };
+    }
     const hook = this.uni.appHooks?.[this.hookKey || this.host.name]?.(req, this);
     if (hook) { this.logReq(req, hook.status || 200); return hook; }
     for (const r of this.routes) {

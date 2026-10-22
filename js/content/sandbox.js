@@ -74,4 +74,25 @@ export const SCENARIOS = {
     },
     panels: ['cloud', 'files'],
   },
+  observe: {
+    title: 'Monitored shop',
+    note: 'A shop on web1 with real traffic, node_exporter, Prometheus + Alertmanager on mon, logs and traces. Try: promtool query instant http://mon:9090 \'sum by (route) (rate(http_requests_total[5m]))\', logcli query \'{app="shop", level="error"}\', traces search --service shop --min-duration 500ms',
+    setup(H) {
+      H.observe();
+      H.server('web1', { packages: ['nodejs', 'prometheus-node-exporter'] });
+      H.mkdir('web1', '/opt/shop/node_modules/express', { owner: 'ubuntu' });
+      H.mkdir('web1', '/opt/shop/node_modules/prom-client', { owner: 'ubuntu' });
+      H.write('web1', '/opt/shop/server.js', "const express = require('express');\nconst client = require('prom-client');\nconst app = express();\napp.get('/', (req, res) => res.send('shop'));\napp.listen(3000);\n", { owner: 'ubuntu' });
+      H.service('web1', 'shop', '[Unit]\nDescription=shop\n[Service]\nUser=ubuntu\nWorkingDirectory=/opt/shop\nExecStart=/usr/bin/node server.js\nRestart=always\n[Install]\nWantedBy=multi-user.target\n');
+      H.traffic('web1', 3000, 'shop', { '/': { rps: 15, p50: 0.03, p99: 0.15, err: 0.002 }, '/checkout': { rps: 2, p50: 0.2, p99: 1.4, err: 0.02, method: 'POST', slowFrac: 0.05, spans: [['auth', 'verify session', 0.1], ['payments', 'POST /charge', 0.6, { children: [['bank-api', 'authorize card', 0.8]] }], ['db', 'INSERT order', 0.2]] } });
+      H.server('mon', { packages: ['prometheus', 'prometheus-alertmanager'] });
+      H.authorize('laptop', 'dev', 'mon', 'ubuntu');
+      H.authorize('laptop', 'dev', 'web1', 'ubuntu');
+      H.write('mon', '/etc/prometheus/prometheus.yml', 'global:\n  scrape_interval: 15s\n\nscrape_configs:\n  - job_name: prometheus\n    static_configs:\n      - targets: ["localhost:9090"]\n  - job_name: node\n    static_configs:\n      - targets: ["web1:9100"]\n  - job_name: shop\n    static_configs:\n      - targets: ["web1:3000"]\n');
+      H.run('sudo systemctl restart prometheus', { on: 'mon' });
+      H.install('laptop', 'prometheus', 'logcli', 'traces');
+      H.uni.advance(1200);
+    },
+    panels: ['observe', 'files'],
+  },
 };

@@ -167,6 +167,22 @@ export const SHEET = [
     ['ansible-vault encrypt|view|decrypt file', 'Keep secrets encrypted in git; run with --ask-vault-pass.'],
     ['ansible-lint site.yml', 'Catch shell-instead-of-module, missing names, risky permissions.'],
   ]],
+  ['Observability (Prometheus, logs, traces)', [
+    ['curl -s host:9100/metrics · host:3000/metrics', 'What an exporter / instrumented app exposes.'],
+    ['promtool check config prometheus.yml · check rules rules.yml', 'Validate before reloading.'],
+    ['sudo systemctl reload prometheus', 'Apply config (a bad config keeps the old one; watch prometheus_config_last_reload_successful).'],
+    ["promtool query instant http://mon:9090 'up == 0'", 'Which targets are down.'],
+    ['sum by (route) (rate(http_requests_total[5m]))', 'Requests per second per route (rate first, then sum).'],
+    ['sum(rate(x{status=~"5.."}[5m])) / sum(rate(x[5m]))', 'Error ratio.'],
+    ['histogram_quantile(0.99, sum by (le) (rate(x_bucket[5m])))', 'p99 latency from a histogram (keep le).'],
+    ['predict_linear(node_filesystem_avail_bytes[1h], 4*3600)', 'Where will this be in 4 hours?'],
+    ['alert: X · expr · for: 5m · labels: {severity} · annotations', 'An alerting rule.'],
+    ['amtool alert query · amtool silence add alertname=X --duration=2h --comment=…', 'See alerts · silence with a reason.'],
+    ['logcli query \'{app="shop", level="error"} | json | route="/checkout"\'', 'Structured log search (LogQL).'],
+    ['logcli query \'sum by (msg) (count_over_time({app="shop"} | json [10m]))\'', 'Turn logs into numbers.'],
+    ['traces search --service S --min-duration 1s · traces show ID', 'Find slow traces · read the waterfall.'],
+    ['burn rate = error ratio / (1 − SLO)', 'Over 1 spends the error budget early; 14.4 for 1h = page.'],
+  ]],
 ];
 
 export const DEBUG = [
@@ -205,6 +221,10 @@ export const DEBUG = [
   ['Ansible UNREACHABLE', 'Wrong host/IP · SSH key not authorised · wrong ansible_user · firewall/security group', '`ssh user@host` by hand · check inventory vars · `ansible -m ping -vvv`'],
   ['Ansible "are you root?" / permission denied', 'Task needs root', 'Add `become: true` (or `-b`)'],
   ['Ansible second run still shows changes', 'command/shell tasks, `state: restarted`, templates with timestamps', 'Use modules, handlers, `changed_when`; lint'],
+  ['Prometheus target DOWN (up == 0)', 'Wrong port/path in scrape config · process down · firewall · exporter not installed', '`curl -s mon:9090/api/v1/targets` (lastError) · `curl target:port/metrics` from the Prometheus host'],
+  ['PromQL returns nothing', 'Label typo · series name wrong · vectors with different labels divided · range too short', 'Query the bare metric first · `sum by` both sides to the same labels · use [5m]+'],
+  ['Alert never fires / never reaches anyone', 'rule_files not loaded · `for` not elapsed · no alerting.alertmanagers · route/receiver wrong · silenced', '`curl …/api/v1/rules` · `…/api/v1/alerts` (pending?) · `amtool alert query` · `amtool silence query`'],
+  ['Graph only goes up', 'It is a counter', 'Wrap it in `rate(…[5m])` or `increase(…)`'],
   ['High load / slow', 'CPU-hungry process · memory pressure and swapping · I/O wait', '`uptime` · `top` · `free -h` · `ps aux --sort=-%cpu | head`'],
 ];
 
@@ -258,4 +278,12 @@ export const GLOSSARY = [
   ['Playbook', 'An Ansible YAML file of plays: which hosts, which tasks (modules with arguments).'],
   ['Handler', 'An Ansible task that runs once at the end, only when notified by a task that changed something.'],
   ['Security group', 'A cloud firewall attached to instances: inbound rules by port and source.'],
+  ['Observability', 'Being able to answer new questions about a system\'s behaviour from the signals it emits: metrics, logs and traces.'],
+  ['Golden signals', 'Latency, traffic, errors and saturation: the four things to watch for any service.'],
+  ['Counter / gauge / histogram', 'Metric types: only-increasing totals, values that go up and down, and bucketed observations for percentiles.'],
+  ['PromQL', 'Prometheus\'s query language for selecting, rating and aggregating time series.'],
+  ['Exporter', 'A process that exposes metrics about something (a machine, a database) in Prometheus format.'],
+  ['Span / trace', 'A timed unit of work / the tree of spans for one request across services.'],
+  ['SLI / SLO / error budget', 'A measure of good events, the target for it over a window, and how much failure the target allows.'],
+  ['Burn rate', 'How fast the error budget is being spent relative to the SLO window; the basis of good SLO alerts.'],
 ];
