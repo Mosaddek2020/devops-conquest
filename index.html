@@ -1,0 +1,41 @@
+<title>Git Conquest</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="A hands-on, mastery-based path from zero to hero in Git and GitHub, with a real git simulator in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="css/app.css">
+
+<div class="app" id="app">
+  <header class="topbar" id="topbar">
+    <a class="brand" href="#/" aria-label="Git Conquest home">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M8 26V6M8 16c0-5 4-7 8-7h0c4 0 8 2 8 7v10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="8" cy="6" r="3.4" class="bm-a"/><circle cx="8" cy="26" r="3.4" class="bm-b"/><circle cx="24" cy="26" r="3.4" class="bm-c"/>
+      </svg>
+      <span class="brand-name">Git Conquest</span>
+    </a>
+    <nav class="mainnav" aria-label="Main">
+      <a href="#/" data-nav="world">World</a>
+      <a href="#/path" data-nav="path">Path</a>
+      <a href="#/sandbox" data-nav="sandbox">Sandbox</a>
+      <a href="#/guide" data-nav="guide">Field Guide</a>
+      <a href="#/profile" data-nav="profile">Profile</a>
+    </nav>
+    <div class="rankbox" id="rankbox"></div>
+    <button class="icon-btn theme-toggle" id="themeToggle" type="button" aria-label="Switch colour theme" title="Switch colour theme">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+    </button>
+  </header>
+  <main id="view" class="view" tabindex="-1">
+    <div class="boot">
+      <p class="boot-title">Git Conquest</p>
+      <p class="boot-sub">Loading your world…</p>
+      <noscript><p>Git Conquest needs JavaScript: it runs a git simulator in your browser.</p></noscript>
+    </div>
+  </main>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script type="module" src="js/app.js"></script>
