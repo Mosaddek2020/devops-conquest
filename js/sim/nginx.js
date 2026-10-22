@@ -92,7 +92,7 @@ export function loadConfig(host, path = '/etc/nginx/nginx.conf') {
   const servers = [];
   const upstreams = {};
   for (const d of http?.block || []) {
-    if (d.name === 'upstream') upstreams[d.args[0]] = d.block.filter(x => x.name === 'server').map(x => x.args[0]);
+    if (d.name === 'upstream') { const list = d.block.filter(x => x.name === 'server'); upstreams[d.args[0]] = list.filter(x => !x.args.includes('backup') && !x.args.includes('down')).map(x => x.args[0]); upstreams[d.args[0]].backup = list.filter(x => x.args.includes('backup')).map(x => x.args[0]); }
     if (d.name !== 'server') continue;
     const srv = { listens: [], names: [], root: null, index: ['index.html'], locations: [], headers: [], returns: null, file: d.file, line: d.line, certs: {} };
     for (const x of d.block) {
@@ -261,17 +261,25 @@ export class Nginx {
     if (!m) return { status: 500, headers, body: ERR(500, 'Internal Server Error') };
     let [, scheme, hostName, port, base] = m;
     let upstreamHosts = [`${hostName}${port ? ':' + port : ''}`];
-    if (this.conf.upstreams[hostName]) upstreamHosts = this.conf.upstreams[hostName];
+    if (this.conf.upstreams[hostName]) {
+      // round robin over the primary servers, backups only when every primary fails
+      const ups = this.conf.upstreams[hostName];
+      this.rr = (this.rr || 0) + 1;
+      const k = ups.length ? this.rr % ups.length : 0;
+      upstreamHosts = [...ups.slice(k), ...ups.slice(0, k), ...(ups.backup || [])];
+      if (upstreamHosts.length === 1) upstreamHosts = [...upstreamHosts];
+      upstreamHosts.multi = true;
+    }
     // with a URI in proxy_pass, the matched location prefix is replaced by it
     const rest = base !== undefined ? normPath(base + '/' + req.path.slice(loc.path.length)).replace(/\/$/, req.path.endsWith('/') ? '/' : '') : req.path;
     for (const up of upstreamHosts) {
       const url = `${scheme}://${up}${rest || '/'}${req.query || ''}`;
       if (req.depth > 4) return { status: 508, headers, body: ERR(508, 'Loop Detected') };
       const r = httpRequest(this.uni, this.host, url, { method: req.method, headers: { ...req.headers, 'x-forwarded-for': req.fromIp }, body: req.body, depth: (req.depth || 0) + 1 });
-      if (!r.error) return { status: r.status, headers: { ...r.headers, ...headers, server: 'nginx/1.24.0 (Ubuntu)' }, body: r.body };
+      if (!r.error) return { status: r.status, headers: { ...r.headers, ...headers, server: 'nginx/1.24.0 (Ubuntu)', 'x-upstream': up }, body: r.body };
       const why = r.error === 'ECONNREFUSED' ? '111: Connection refused' : r.error === 'ETIMEDOUT' ? '110: Connection timed out' : r.error === 'ENOTFOUND' ? `host not found in upstream "${up}"` : r.error;
       this.errlog(`connect() failed (${why}) while connecting to upstream, client: ${req.fromIp}, server: _, request: "${req.method} ${req.path} HTTP/1.1", upstream: "${url}"`);
-      if (upstreamHosts.length === 1) return r.error === 'ETIMEDOUT' ? { status: 504, headers, body: ERR(504, 'Gateway Time-out') } : { status: 502, headers, body: ERR(502, 'Bad Gateway') };
+      if (upstreamHosts.length === 1 && !upstreamHosts.multi) return r.error === 'ETIMEDOUT' ? { status: 504, headers, body: ERR(504, 'Gateway Time-out') } : { status: 502, headers, body: ERR(502, 'Bad Gateway') };
     }
     return { status: 502, headers, body: ERR(502, 'Bad Gateway') };
   }

@@ -96,5 +96,7 @@ t('set -euo pipefail; echo $NOPE', /NOPE: unbound variable/);
 t("printf 'set -e\\nfalse\\necho no\\n' > s.sh; bash s.sh; echo code=$?", 'code=1');
 t('f() { return 3; }; f; echo $?', '3');
 t('x=$(nosuch 2>&1); echo "[$x]"', '[nosuch: command not found]');
+t("printf 'echo ran > out.txt\\n' > s.sh; bash -n s.sh; echo code=$?; ls out.txt 2>&1 | head -c 2", 'code=0\nls');
+t("printf 'if true; then\\necho x\\n' > s.sh; bash -n s.sh; echo code=$?", /syntax error[\s\S]*code=2/);
 console.log(`\n${n - fails}/${n} shell checks pass`);
 process.exit(fails ? 1 : 0);

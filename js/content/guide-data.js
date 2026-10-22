@@ -183,6 +183,18 @@ export const SHEET = [
     ['traces search --service S --min-duration 1s · traces show ID', 'Find slow traces · read the waterfall.'],
     ['burn rate = error ratio / (1 − SLO)', 'Over 1 spends the error budget early; 14.4 for 1h = page.'],
   ]],
+  ['Reliability and incidents', [
+    ['upstream shop { server web1:3000; server web2:3000; }', 'nginx load balancing; a failed server is retried on the next one.'],
+    ['ab -n 200 -c 10 http://host/', 'Load test: watch "Failed requests" and "Non-2xx responses".'],
+    ['incident declare --sev 2 --title "…" · incident role commander me', 'Open an incident and take command.'],
+    ['incident update --public "…" · incident note "…" · incident status mitigated', 'Status page · timeline note · move the status on.'],
+    ['incident timeline [ID]', 'The record to build the postmortem from.'],
+    ['bash -n script.sh · script.sh --dry-run', 'Check syntax · see what it would do before doing it.'],
+    ['sudo -u postgres pg_dump shop -f /var/backups/shop.sql', 'Logical backup of a database.'],
+    ['aws s3 cp file s3://bucket/path/', 'Copy a backup off the server.'],
+    ['sudo -u postgres psql -f restore.sql', 'Restore a dump (then count rows to prove it).'],
+    ['RPO · RTO', 'Data you can lose (time since the last backup) · time to restore service.'],
+  ]],
 ];
 
 export const DEBUG = [
@@ -285,5 +297,11 @@ export const GLOSSARY = [
   ['Exporter', 'A process that exposes metrics about something (a machine, a database) in Prometheus format.'],
   ['Span / trace', 'A timed unit of work / the tree of spans for one request across services.'],
   ['SLI / SLO / error budget', 'A measure of good events, the target for it over a window, and how much failure the target allows.'],
+  ['Single point of failure', 'A component whose failure takes the whole service down.'],
+  ['Incident commander', 'The person who coordinates an incident: decides, delegates and keeps everyone informed, rather than debugging.'],
+  ['Mitigation', 'Restoring service quickly (rollback, failover, restart) before the root cause is fully understood.'],
+  ['Blameless postmortem', 'A written review of an incident that looks for contributing factors in systems and processes, not someone to blame.'],
+  ['RPO / RTO', 'Recovery point objective (how much data you can afford to lose) and recovery time objective (how long until service is back).'],
+  ['Game day', 'A planned exercise that injects failures to test systems, runbooks and people, with a hypothesis and an abort plan.'],
   ['Burn rate', 'How fast the error budget is being spent relative to the SLO window; the basis of good SLO alerts.'],
 ];

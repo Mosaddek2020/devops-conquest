@@ -1,3 +1,5 @@
+import { relWorld } from './r10-reliability.js';
+
 // Sandbox starting points. Later simulators add more (containers, clusters, cloud).
 
 export const SCENARIOS = {
@@ -94,5 +96,11 @@ export const SCENARIOS = {
       H.uni.advance(1200);
     },
     panels: ['observe', 'files'],
+  },
+  reliable: {
+    title: 'Redundant shop',
+    note: 'nginx on lb balancing web1 and web2, PostgreSQL with 100 orders on db1 and an S3 bucket for backups. Try: ab -n 200 -c 10 http://shop.lumen.dev/, stop the shop on one server, incident declare --sev 3 --title "game day", ssh ubuntu@db1 then sudo -u postgres pg_dump shop -f /var/backups/shop.sql',
+    setup(H) { relWorld(H, { db: true, orders: 100, cloud: true }); },
+    panels: ['network', 'system'],
   },
 };

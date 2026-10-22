@@ -6,7 +6,7 @@ import { fsx, modeString, humanSize, parseMode, normPath, dirname, basename } fr
 import { SimError } from '../host.js';
 import { access } from '../session.js';
 import { C, stripAnsi } from '../../git/world.js';
-import { globToRegex } from '../bash.js';
+import { globToRegex, parse as parseBash } from '../bash.js';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -716,6 +716,10 @@ def(['bash', 'sh', 'dash', 'zsh'], c => {
   const st = c.host.stat(p);
   if (!st) return c.fail(`${c.name}: ${a[0]}: No such file or directory`, 127);
   if (!access(c.host, c.user, p, 'r')) return c.fail(`${c.name}: ${a[0]}: Permission denied`, 126);
+  if (flags.some(f => f.includes('n'))) {
+    // -n: read and parse the script without running it
+    try { parseBash(c.host.files.get(p)); return 0; } catch (err) { return c.fail(`${a[0]}: ${String(err.message).replace(/^bash: /, '')}`, 2); }
+  }
   const e2 = { ...c.e, opts: { ...c.e.opts, x: flags.some(f => f.includes('x')) || c.e.opts.x, e: flags.some(f => f.includes('e')) || false } };
   return c.sh.runScript(c.host.files.get(p), e2, c.io, { args: a.slice(1), name: a[0], result: c.result });
 }, { always: true });

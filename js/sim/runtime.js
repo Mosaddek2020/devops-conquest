@@ -194,6 +194,8 @@ export class NodeApp {
   }
 
   start() {
+    // a full disk stops apps at startup (they cannot open their log or temp files)
+    if (this.host.diskGB && this.host.diskUsedGB >= this.host.diskGB * 0.999) return { ok: false, code: 1, logs: [`node:internal/fs/utils:351`, '    throw err;', '    ^', '', `Error: ENOSPC: no space left on device, open '/var/log/${(this.file.split('/').slice(-2, -1)[0]) || 'app'}/app.log'`, "    at Object.openSync (node:fs:573:18)", "  errno: -28,", "  code: 'ENOSPC',", '', 'Node.js v20.18.0'] };
     const scope = this.scope();
     this.scopeCache = scope;
     // modules installed?

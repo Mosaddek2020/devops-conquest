@@ -930,10 +930,11 @@ def('psql', c => {
   const a = [...c.args];
   let hostName = '127.0.0.1', user = 'postgres', sql = null, url = null;
   for (let i = 0; i < a.length; i++) {
-    if (a[i] === '-h') hostName = a[++i]; else if (a[i] === '-U') user = a[++i]; else if (a[i] === '-c') sql = a[++i]; else if (a[i] === '-d') { const d = a[++i]; if (/^postgres(ql)?:\/\//.test(d)) url = d; } else if (/^postgres(ql)?:\/\//.test(a[i])) url = a[i];
+    if (a[i] === '-h') hostName = a[++i]; else if (a[i] === '-U') user = a[++i]; else if (a[i] === '-c') sql = a[++i]; else if (a[i] === '-f') { const f = a[++i]; const txt = c.host.files.get(c.resolve(f)); if (txt === undefined) return c.fail(`psql: error: ${f}: No such file or directory`, 1); sql = txt.split('\n').filter(l => !/^\s*--/.test(l)).join('\n'); } else if (a[i] === '-d') { const d = a[++i]; if (/^postgres(ql)?:\/\//.test(d)) url = d; } else if (/^postgres(ql)?:\/\//.test(a[i])) url = a[i];
   }
   if (url) { const m = url.match(/^\w+:\/\/(?:([^:@]+)(?::([^@]*))?@)?([^:/]+)/); if (m) { user = m[1] || user; hostName = m[3]; } }
-  if (sql === null) return c.fail('psql: the simulator runs one statement at a time: psql -U postgres -c "SELECT …"', 2);
+  if (sql === null && c.stdin) sql = String(c.stdin).split('\n').filter(l => !/^\s*--/.test(l)).join('\n');
+  if (sql === null) return c.fail('psql: the simulator runs statements given with -c, -f or on stdin: psql -U postgres -c "SELECT …"', 2);
   const r = connect(c.uni, c.host, hostName, 5432);
   if (r.error) return c.fail(r.error === 'ENOTFOUND' ? `psql: error: could not translate host name "${hostName}" to address: Name or service not known` : `psql: error: connection to server at "${hostName}", port 5432 failed: Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?`, 2);
   const auth = r.listener.program?.checkAuth?.(url || `postgres://${user}:${c.env.PGPASSWORD ?? (hostName === '127.0.0.1' || hostName === 'localhost' ? r.listener.program?.host?.labDbPassword : '')}@x`);

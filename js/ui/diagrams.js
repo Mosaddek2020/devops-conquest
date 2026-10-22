@@ -554,6 +554,51 @@ D['slo-budget'] = () => {
   return figure(d, 'SLOs replace "is anything red?" with "are we spending reliability faster than we can afford?", which is what users actually feel.');
 };
 
+
+// ---------- Realm 10: Reliability ----------
+D['redundancy'] = () => {
+  const d = mk(720, 220, 'Removing single points of failure: one app server behind a proxy fails completely; two behind a load balancer survive losing one');
+  d.text(170, 24, 'single point of failure', { weight: 700, font: 'display', size: 13, color: 'bad' });
+  d.box(20, 50, 110, 46, 'users', { color: 'accent', titleSize: 12 });
+  d.box(20, 130, 110, 46, 'nginx', { color: 'text', titleSize: 12 });
+  d.box(200, 130, 120, 46, 'web1 ✗', { color: 'bad', titleSize: 13 });
+  d.arrow(75, 98, 75, 126, { color: 'text' });
+  d.arrow(132, 153, 196, 153, { color: 'bad', label: '502', dy: -6, size: 11 });
+  d.text(540, 24, 'redundant', { weight: 700, font: 'display', size: 13, color: 'ok' });
+  d.box(400, 50, 110, 46, 'users', { color: 'accent', titleSize: 12 });
+  d.box(400, 130, 110, 46, 'nginx upstream', { color: 'text', titleSize: 11.5 });
+  d.box(580, 105, 120, 40, 'web1 ✗', { color: 'bad', titleSize: 12 });
+  d.box(580, 160, 120, 40, 'web2 ✓', { color: 'ok', titleSize: 12 });
+  d.arrow(455, 98, 455, 126, { color: 'text' });
+  d.arrow(512, 145, 576, 125, { color: 'bad', dash: '4 4' });
+  d.arrow(512, 160, 576, 178, { color: 'ok', label: 'retried', dy: 16, size: 11 });
+  return figure(d, 'Redundancy only helps if failover is automatic and tested. Then look one level up: the load balancer itself is now the single point.');
+};
+
+D['incident-roles'] = () => {
+  const d = mk(720, 210, 'Incident roles: one commander coordinates, others investigate, communicate and record');
+  d.box(270, 20, 180, 56, 'Incident commander', { sub: 'decides, delegates', color: 'bad', titleSize: 13 });
+  [['Operations', 'investigate, mitigate', 'info'], ['Communications', 'status page, stakeholders', 'warn'], ['Scribe', 'timeline, decisions', 'muted']].forEach(([t, sub, c], k) => { d.box(40 + k * 230, 120, 180, 56, t, { sub, color: c, titleSize: 13 }); d.arrow(360, 78, 130 + k * 230, 116, { color: 'text' }); });
+  d.text(360, 200, 'Mitigate first (restore service), find root cause later. Update stakeholders on a fixed cadence.', { size: 12, color: 'muted' });
+  return figure(d, 'In a small team one person may hold several roles, but someone must clearly be in charge.');
+};
+
+D['backup-321'] = () => {
+  const d = mk(720, 200, 'The 3-2-1 backup rule: three copies, on two different media, one off-site; and restores that are actually tested');
+  [['3 copies', 'production + 2 backups', 'info'], ['2 media', 'e.g. disk + object storage', 'warn'], ['1 off-site', 'another region / account', 'ok']].forEach(([t, sub, c], k) => d.box(20 + k * 235, 30, 210, 70, t, { sub, color: c, titleSize: 15 }));
+  d.text(360, 130, 'RPO: how much data you can afford to lose (time since the last good backup).', { size: 12.5 });
+  d.text(360, 152, 'RTO: how long a restore may take until service is back.', { size: 12.5 });
+  d.text(360, 182, 'A backup you have never restored is a hope, not a backup.', { size: 12.5, color: 'bad', weight: 700 });
+  return figure(d, 'Schedule restore drills; measure the real RPO and RTO; keep backups where the same mistake (or attacker) cannot delete them.');
+};
+
+D['chaos-loop'] = () => {
+  const d = mk(720, 180, 'A chaos experiment: define steady state, form a hypothesis, inject a small failure, observe, learn');
+  const steps = [['steady state', 'metric that means healthy'], ['hypothesis', '"losing web2 causes no errors"'], ['inject', 'small blast radius, abort plan'], ['observe', 'same metric'], ['learn', 'fix, share, repeat']];
+  steps.forEach(([t, sub], k) => { d.box(10 + k * 142, 50, 128, 76, t, { sub, color: ['info', 'main', 'bad', 'warn', 'ok'][k], titleSize: 13, subSize: 10.5 }); if (k) d.arrow(10 + k * 142 - 12, 88, 10 + k * 142 - 2, 88, { color: 'text' }); });
+  return figure(d, 'Chaos engineering is careful science, not random breakage: start in staging, keep the blast radius small, and stop when the steady state breaks.');
+};
+
 export function renderDiagram(name) {
   const fn = D[name];
   if (!fn) return h('div', { class: 'figure' }, `Missing diagram: ${name}`);
