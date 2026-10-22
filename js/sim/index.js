@@ -8,6 +8,8 @@ import './cmd/net.js';
 import './cmd/gitcmd.js';
 import './systemd.js';
 import './ai.js';
+import './docker.js';
+import './docker-lab.js';
 import { wirePackages } from './packages.js';
 import { installSystemdTicker } from './systemd.js';
 

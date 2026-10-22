@@ -43,4 +43,16 @@ export const SCENARIOS = {
     },
     panels: ['network', 'system', 'files'],
   },
+  docker: {
+    title: 'Docker playground',
+    note: 'Docker is installed and you are in the docker group; a small Node app is in ~/app. Try: docker run -d -p 8080:80 nginx, curl localhost:8080, then write a Dockerfile for ~/app and docker build -t app .',
+    setup(H) {
+      H.docker('laptop');
+      H.write('laptop', '~/app/server.js', "const express = require('express');\nconst app = express();\nconst PORT = process.env.PORT || 3000;\napp.get('/', (req, res) => res.send('Hello from a container'));\napp.get('/health', (req, res) => res.json({ status: 'ok' }));\napp.listen(PORT, () => console.log(`app listening on ${PORT}`));\n", { owner: 'dev' });
+      H.write('laptop', '~/app/package.json', '{\n  "name": "app",\n  "version": "1.0.0",\n  "dependencies": { "express": "^4.21.1" }\n}\n', { owner: 'dev' });
+      H.write('laptop', '~/app/package-lock.json', '{\n  "name": "app",\n  "lockfileVersion": 3,\n  "packages": { "node_modules/express": { "version": "4.21.1" } }\n}\n', { owner: 'dev' });
+      H.pull('laptop', 'nginx', 'alpine', 'node:20-alpine');
+    },
+    panels: ['docker', 'files', 'system'],
+  },
 };

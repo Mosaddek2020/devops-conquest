@@ -109,11 +109,28 @@ export function wirePackages() {
 
 export const UBUNTU_BASE = ['curl', 'wget', 'git', 'ufw', 'openssh-server', 'cron', 'nano', 'vim', 'netcat-openbsd', 'python3', 'tar', 'gzip', 'sudo', 'less', 'iproute2', 'iputils-ping'];
 
+export const pkgBytes = size => { const m = String(size || '2 MB').match(/([\d.,]+)\s*(kB|MB|B)/); return m ? Number(m[1].replace(',', '')) * (m[2] === 'MB' ? 1e6 : m[2] === 'kB' ? 1e3 : 1) : 2e6; };
+// packages every Ubuntu machine has; in a slim container image they may be missing
+const BASE_BINS = { python3: ['python3'], 'iputils-ping': ['ping'], iproute2: ['ip', 'ss'], sudo: ['sudo'], less: ['less'], tar: ['tar'], gzip: ['gzip', 'gunzip'], 'ca-certificates': [], 'build-essential': ['make', 'gcc', 'g++'], procps: ['ps', 'top', 'free', 'pkill', 'pgrep', 'uptime'] };
+for (const [n, bins] of Object.entries(BASE_BINS)) if (!CATALOG[n]) CATALOG[n] = { version: '1.0', size: n === 'build-essential' ? '250 MB' : n === 'python3' ? '28 MB' : '400 kB', bins };
+
 function installPkg(host, uni, name, out) {
   const p = CATALOG[name];
   if (host.packages.has(name)) return [];
   for (const d of p.deps || []) installPkg(host, uni, d, out);
   host.packages.set(name, p.version);
+  if (host.binaries) {
+    // inside a container: no systemd, just the files and commands
+    for (const b of p.bins || []) host.binaries.add(b);
+    host.fakeSizes = host.fakeSizes || new Map();
+    host.writeSys(`/usr/share/doc/${name}/copyright`, `${name} ${p.version}\n`);
+    host.fakeSizes.set(`/usr/share/doc/${name}/copyright`, pkgBytes(p.size) * 3);
+    out.push(`Setting up ${name} (${p.version}) ...`);
+    if (name !== 'docker.io') p.install?.(host, uni);
+    for (const u of [...host.units.keys()]) host.units.delete(u);
+    uni.emit({ type: 'pkg-install', host: host.name, pkg: name });
+    return [];
+  }
   const units = p.install?.(host, uni) || [];
   out.push(`Setting up ${name} (${p.version}) ...`);
   for (const u of units) {
@@ -137,6 +154,7 @@ def(['apt', 'apt-get'], c => {
       if (c.user !== 'root') return c.fail('Reading package lists... Done\nE: Could not open lock file /var/lib/apt/lists/lock - open (13: Permission denied)\nE: Unable to lock directory /var/lib/apt/lists/', 100);
       c.print('Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease', 'Get:2 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]', 'Get:3 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]', 'Fetched 252 kB in 1s (310 kB/s)', 'Reading package lists... Done', 'Building dependency tree... Done', 'Reading state information... Done', '12 packages can be upgraded. Run \'apt list --upgradable\' to see them.');
       host.aptUpdated = true;
+      if (host.binaries) { host.fakeSizes = host.fakeSizes || new Map(); host.writeSys('/var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_noble_main_binary-amd64_Packages', 'Package: …\n'); host.fakeSizes.set('/var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_noble_main_binary-amd64_Packages', 42e6); }
       return 0;
     }
     case 'upgrade': case 'full-upgrade': case 'dist-upgrade': {
@@ -148,10 +166,11 @@ def(['apt', 'apt-get'], c => {
       if (needRoot() !== null) return 100;
       if (!names.length) { c.print('0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.'); return 0; }
       c.print('Reading package lists... Done', 'Building dependency tree... Done', 'Reading state information... Done');
+      if (host.binaries && !host.aptUpdated) return c.fail(`E: Unable to locate package ${names[0]}`, 100);
       const missing = names.filter(n => !CATALOG[n] && !UBUNTU_BASE.includes(n));
       if (missing.length) return c.fail(`E: Unable to locate package ${missing[0]}`, 100);
-      const todo = names.filter(n => CATALOG[n] && !host.packages.has(n));
-      for (const n of names.filter(n => host.packages.has(n) || UBUNTU_BASE.includes(n) && !CATALOG[n])) c.print(`${n} is already the newest version (${CATALOG[n]?.version || 'installed'}).`);
+      const todo = names.filter(n => CATALOG[n] && !host.packages.has(n) && !(host.binaries && (CATALOG[n].bins || []).length && CATALOG[n].bins.every(b => host.binaries.has(b))));
+      for (const n of names.filter(n => !todo.includes(n))) c.print(`${n} is already the newest version (${CATALOG[n]?.version || 'installed'}).`);
       if (!todo.length) { c.print('0 upgraded, 0 newly installed, 0 to remove and 12 not upgraded.'); return 0; }
       const all = new Set();
       const add = n => { if (host.packages.has(n) || all.has(n)) return; for (const d of CATALOG[n].deps || []) add(d); all.add(n); };
@@ -191,6 +210,41 @@ def(['apt', 'apt-get'], c => {
   }
   return c.fail(`E: Invalid operation ${sub || ''}`, 100);
 });
+
+// Alpine's package manager (busybox images)
+const APK_NAMES = { nodejs: 'nodejs', npm: 'npm', python3: 'python3', 'py3-pip': 'python3-pip', redis: 'redis-server', postgresql: 'postgresql', 'postgresql-client': 'postgresql-client', bind: 'dnsutils', 'bind-tools': 'dnsutils', 'build-base': 'build-essential', openssh: 'openssh-server', 'openssh-client': 'openssh-server' };
+def('apk', c => {
+  const [sub, ...rest] = c.args;
+  const host = c.host;
+  if (c.user !== 'root') return c.fail('ERROR: Unable to lock database: Permission denied\nERROR: Failed to open apk database: Permission denied', 99);
+  const noCache = rest.includes('--no-cache');
+  const names = rest.filter(a => !a.startsWith('-'));
+  if (sub === 'update') { c.print('fetch https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/APKINDEX.tar.gz', 'v3.20.3 [https://dl-cdn.alpinelinux.org/alpine/v3.20/main]', 'OK: 24165 distinct packages available'); host.apkIndex = true; host.fakeSizes = host.fakeSizes || new Map(); host.writeSys('/var/cache/apk/APKINDEX.tar.gz', 'index'); host.fakeSizes.set('/var/cache/apk/APKINDEX.tar.gz', 2.4e6); return 0; }
+  if (sub === 'add') {
+    if (!names.length) return c.fail('ERROR: no packages given', 1);
+    if (!noCache && !host.apkIndex) { c.print('WARNING: opening from cache https://dl-cdn.alpinelinux.org/alpine/v3.20/main: No such file or directory'); return c.fail(`ERROR: unable to select packages:\n  ${names[0]} (no such package):\n    required by: world[${names[0]}]`, 1); }
+    let k = 0;
+    for (const n of names) {
+      const deb = APK_NAMES[n] || n;
+      const p = CATALOG[deb];
+      const bins = p?.bins?.length ? p.bins : [n];
+      k++;
+      c.print(`(${k}/${names.length}) Installing ${n} (${p?.version?.replace(/^\d+:/, '').split(/[-+~]/)[0] || '1.0'}-r0)`);
+      for (const b of bins) host.binaries?.add(b);
+      host.packages.set(deb, p?.version || '1.0');
+      host.fakeSizes = host.fakeSizes || new Map();
+      host.writeSys(`/usr/share/apk/${n}.list`, n + '\n');
+      host.fakeSizes.set(`/usr/share/apk/${n}.list`, pkgBytes(p?.size || '1 MB') * 2);
+      if (!noCache) { host.writeSys(`/var/cache/apk/${n}.apk`, n); host.fakeSizes.set(`/var/cache/apk/${n}.apk`, pkgBytes(p?.size || '1 MB')); }
+      c.uni.emit({ type: 'pkg-install', host: host.name, pkg: deb, apk: true });
+    }
+    c.print(`OK: ${(7 + names.length * 3.1).toFixed(0)} MiB in ${14 + names.length * 4} packages`);
+    return 0;
+  }
+  if (sub === 'del') { for (const n of names) { const deb = APK_NAMES[n] || n; host.packages.delete(deb); for (const b of CATALOG[deb]?.bins || [n]) host.binaries?.delete(b); c.print(`(1/1) Purging ${n}`); } return 0; }
+  if (sub === 'info') { for (const n of host.packages.keys()) c.print(n); return 0; }
+  return c.fail(`apk-tools 2.14.4, compiled for x86_64.\n\nusage: apk [<OPTIONS>...] COMMAND [<ARGUMENTS>...]`, 1);
+}, { pkg: 'apk-tools' });
 
 def('dpkg', c => {
   if (c.args[0] === '-l' || c.args[0] === '--list') { c.print('||/ Name           Version'); for (const [n, v] of c.host.packages) if (!c.args[1] || n.includes(c.args[1].replace(/\*/g, ''))) c.print(`ii  ${n.padEnd(14)} ${v}`); return 0; }

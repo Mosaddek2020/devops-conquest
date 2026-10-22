@@ -7,6 +7,7 @@ import { renderMarkdown } from './ui/markdown.js';
 import { Terminal } from './ui/terminal.js';
 import { GitHubView } from './ui/panels.js';
 import { SystemView, FileTreeView, NetworkView } from './ui/devpanels.js';
+import './ui/dockerpanel.js';
 import { extraPanels } from './ui/panelRegistry.js';
 import './sim/index.js';
 import { Session } from './sim/session.js';

@@ -6,11 +6,17 @@ import { UBUNTU_BASE, installPkg } from './packages.js';
 import { Session } from './session.js';
 import { installRunner } from './runner.js';
 import { privateKeyFor } from './cmd/system.js';
+import { installDockerTicker, engineOf } from './docker.js';
+import { programFactories } from './runtime.js';
+
+programFactories.set('dockerd', () => ({ memMB: 70, start: () => ({ ok: true, ports: [], logs: ['API listen on /run/docker.sock'] }), handle: () => ({ error: 'EMPTY' }) }));
 
 export function newUniverse(opts = {}) {
   const uni = new Universe(opts);
   installSystemdTicker(uni);
   installRunner(uni, addServer);
+  installDockerTicker(uni);
+  uni.dockerInstall = h => engineOf(h, uni);
   uni.cronRunner = (host, user, cmd) => {
     const s = new Session(uni, host, { user });
     s.advancePerCommand = 0;

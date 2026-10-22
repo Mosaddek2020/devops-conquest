@@ -171,7 +171,18 @@ def(['w', 'who', 'users', 'last'], c => {
 
 // ---------- processes ----------
 function procRows(host) {
-  return [...host.procs.values()].sort((a, b) => a.pid - b.pid);
+  const rows = [...host.procs.values()];
+  // a container's processes are ordinary processes of the machine running it
+  let k = 0;
+  for (const ctr of host.docker?.containers.values() || []) {
+    k++;
+    if (ctr.status !== 'running' || !ctr.h) continue;
+    for (const p of ctr.h.procs.values()) {
+      const u = ctr.h.users.get(p.user);
+      rows.push({ ...p, pid: 20000 + k * 100 + (p.pid % 100), ppid: 19000 + k, user: host.users.has(p.user) ? p.user : String(u?.uid ?? p.user), container: ctr.name });
+    }
+  }
+  return rows.sort((a, b) => a.pid - b.pid);
 }
 const memPct = (host, p) => ((p.mem || 0) / host.memMB) * 100;
 
@@ -367,6 +378,9 @@ def(['pip', 'pip3'], c => {
   return c.fail(`ERROR: unknown command "${sub}"`, 1);
 });
 
+// rough installed size (MB) of popular packages, dependencies included
+const NPM_WEIGHT = { express: 2.1, jest: 38, eslint: 24, typescript: 23, nodemon: 6.5, pg: 0.9, redis: 1.2, lodash: 1.4, prettier: 8.4, webpack: 31, '@playwright/test': 9, vitest: 29, morgan: 0.2, dotenv: 0.1 };
+
 def(['npm', 'npx', 'yarn', 'pnpm'], c => {
   const [sub, ...rest] = c.args;
   const host = c.host;
@@ -385,6 +399,9 @@ def(['npm', 'npx', 'yarn', 'pnpm'], c => {
     if (!access(host, c.user, c.cwd, 'w')) return c.fail(`npm error code EACCES\nnpm error syscall mkdir\nnpm error path ${nm}\nnpm error errno -13\nnpm error Error: EACCES: permission denied, mkdir '${nm}'`, 243);
     host.mkdirMeta(nm, c.user);
     for (const d of Object.keys(deps)) { host.mkdirMeta(`${nm}/${d}`, c.user); host.writeFile(`${nm}/${d}/package.json`, JSON.stringify({ name: d, version: String(deps[d]).replace(/^\^|~/, '') }) + '\n', c.user); }
+    // honest weights so image sizes and build contexts mean something
+    host.fakeSizes = host.fakeSizes || new Map();
+    for (const d of Object.keys(deps)) { const f = `${nm}/${d}/index.js`; host.writeFile(f, `module.exports = require('./lib');\n`, c.user); host.fakeSizes.set(host.realPath(f), (NPM_WEIGHT[d] ?? 1.6) * 1e6); }
     if (!host.files.has(c.resolve('package-lock.json'))) host.writeFile(c.resolve('package-lock.json'), JSON.stringify({ name: pkg.name, lockfileVersion: 3, requires: true, packages: Object.fromEntries(Object.entries(deps).map(([k, v]) => [`node_modules/${k}`, { version: String(v).replace(/^\^|~/, '') }])) }, null, 2) + '\n', c.user);
     const n = Object.keys(deps).length * 31 + 7;
     c.print('', `added ${n} packages, and audited ${n + 1} packages in 2s`, '', `${Math.ceil(n / 9)} packages are looking for funding`, '  run `npm fund` for details', '', host.labNpmVulns ? `${C.yellow(host.labNpmVulns + ' high severity vulnerabilities')}\n\nTo address all issues, run:\n  npm audit fix` : 'found 0 vulnerabilities');
@@ -534,8 +551,13 @@ function sshAuth(c, target, tuser, identity) {
 }
 
 def('ssh', c => {
-  const o = opts(c.args, { bool: ['-T', '-v', '-A', '-N', '-t', '-q', '-4'], val: ['-i', '-p', '-o', '-L', '-J', '-l'] });
-  const [dest, ...cmd] = o._;
+  // options end at the destination; everything after it is the remote command
+  const SSH_VAL = ['-i', '-p', '-o', '-L', '-J', '-l'];
+  let cut = 0;
+  while (cut < c.args.length && c.args[cut].startsWith('-')) cut += SSH_VAL.includes(c.args[cut]) ? 2 : 1;
+  const o = opts(c.args.slice(0, cut + 1), { bool: ['-T', '-v', '-A', '-N', '-t', '-q', '-4'], val: SSH_VAL });
+  const dest = o._[0];
+  const cmd = c.args.slice(cut + 1);
   if (!dest) return c.fail('usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] [-B bind_interface] [-b bind_address]\n           [-c cipher_spec] [-D [bind_address:]port] [-E log_file]\n           [-i identity_file] [-J destination] [-L address]\n           [-l login_name] [-p port] destination [command [argument ...]]', 255);
   if (/github\.com$/.test(dest)) return registry.ssh_github ? registry.ssh_github(c) : c.fail(`git@github.com: Permission denied (publickey).`, 255);
   let [tuser, hostName] = dest.includes('@') ? dest.split('@') : [o['-l'] || c.user, dest];

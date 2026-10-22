@@ -112,7 +112,7 @@ def(['nslookup', 'host'], c => {
   return 0;
 });
 
-const CURL_ERR = { ENOTFOUND: [6, h => `Could not resolve host: ${h}`], ECONNREFUSED: [7, (h, p) => `Failed to connect to ${h} port ${p} after 0 ms: Couldn't connect to server`], ETIMEDOUT: [28, (h, p) => `Failed to connect to ${h} port ${p} after 10002 ms: Timeout was reached`], EHOSTUNREACH: [7, (h, p) => `Failed to connect to ${h} port ${p} after 3061 ms: No route to host`], EMPTY: [52, () => 'Empty reply from server'], BADURL: [3, () => 'URL rejected: Malformed input to a URL function'] };
+const CURL_ERR = { ENOTFOUND: [6, h => `Could not resolve host: ${h}`], ECONNREFUSED: [7, (h, p) => `Failed to connect to ${h} port ${p} after 0 ms: Couldn't connect to server`], ETIMEDOUT: [28, (h, p) => `Failed to connect to ${h} port ${p} after 10002 ms: Timeout was reached`], EHOSTUNREACH: [7, (h, p) => `Failed to connect to ${h} port ${p} after 3061 ms: No route to host`], EMPTY: [52, () => 'Empty reply from server'], RESET: [56, () => 'Recv failure: Connection reset by peer'], BADURL: [3, () => 'URL rejected: Malformed input to a URL function'] };
 
 def('curl', c => {
   const o = opts(c.args, { bool: ['-s', '-S', '-f', '-i', '-I', '-L', '-k', '-v', '-sS', '--fail', '--silent', '--include', '--head', '--location', '--insecure', '--verbose', '-fsS', '-sf', '-fs'], val: ['-X', '-H', '-d', '-o', '-w', '-u', '--data', '--header', '--request', '--connect-timeout', '-m', '--max-time', '--data-raw', '-A', '--json'], alias: { '--fail': '-f', '--silent': '-s', '--include': '-i', '--head': '-I', '--location': '-L', '--insecure': '-k', '--verbose': '-v', '--request': '-X', '--data': '-d', '--data-raw': '-d', '--header': '-H' } });

@@ -283,6 +283,101 @@ D['blue-green'] = () => {
   return figure(d, 'The new version is fully running before anyone sees it, and the old one stays warm until you are sure.');
 };
 
+
+// ---------- Realm 6: Containers ----------
+D['vm-vs-container'] = () => {
+  const d = mk(720, 270, 'Virtual machines each carry a whole operating system; containers share the host kernel and carry only the app and its files');
+  d.text(170, 24, 'Virtual machines', { weight: 700, font: 'display', size: 14 });
+  d.text(540, 24, 'Containers', { weight: 700, font: 'display', size: 14 });
+  [0, 1, 2].forEach(k => { d.box(20 + k * 102, 40, 94, 40, `app ${'ABC'[k]}`, { color: 'main', titleSize: 13 }); d.box(20 + k * 102, 84, 94, 40, 'guest OS', { sub: '~1 GB', color: 'muted', titleSize: 12, subSize: 11 }); });
+  d.box(20, 130, 298, 38, 'hypervisor', { color: 'info', titleSize: 13 });
+  d.box(20, 174, 298, 38, 'host OS + kernel', { color: 'text', titleSize: 13 });
+  d.box(20, 218, 298, 38, 'hardware', { color: 'muted', titleSize: 13 });
+  [0, 1, 2].forEach(k => { d.box(390 + k * 104, 40, 96, 40, `app ${'ABC'[k]}`, { color: 'main', titleSize: 13 }); d.box(390 + k * 104, 84, 96, 40, 'libs + files', { sub: '5–200 MB', color: 'feat', titleSize: 12, subSize: 11 }); });
+  d.box(390, 130, 304, 38, 'container runtime (Docker)', { color: 'info', titleSize: 13 });
+  d.box(390, 174, 304, 38, 'host OS + ONE shared kernel', { color: 'text', titleSize: 13 });
+  d.box(390, 218, 304, 38, 'hardware', { color: 'muted', titleSize: 13 });
+  return figure(d, 'A container is not a small VM: it is an ordinary process the kernel fences off with namespaces (what it can see) and cgroups (what it can use). That is why it starts in milliseconds.');
+};
+
+D['image-layers'] = () => {
+  const d = mk(720, 270, 'A Dockerfile builds an image as a stack of read-only layers; a container adds one thin writable layer on top');
+  const rows = [['FROM node:20-slim', 'base layers · 196 MB', 'muted'], ['WORKDIR /app', '0 B', 'muted'], ['COPY package*.json ./', '2 kB', 'info'], ['RUN npm ci --omit=dev', 'dependencies · 38 MB', 'info'], ['COPY . .', 'your code · 40 kB', 'main']];
+  rows.slice().reverse().forEach(([ins, size, c], k) => { d.box(40, 52 + k * 40, 300, 34, ins, { color: c, titleSize: 12.5, align: 'start' }); d.text(352, 74 + k * 40, size, { anchor: 'start', size: 12, color: 'muted' }); });
+  d.box(40, 14, 300, 32, 'container: writable layer', { color: 'warn', dash: '5 4', titleSize: 12.5, align: 'start' });
+  d.text(560, 70, 'Layers are cached.', { weight: 700, font: 'display', size: 13.5 });
+  d.text(560, 92, 'Change a line → that layer and', { size: 12.5, color: 'muted' });
+  d.text(560, 110, 'every layer above it rebuild.', { size: 12.5, color: 'muted' });
+  d.text(560, 150, 'So: rarely-changing things first,', { size: 12.5, color: 'ok' });
+  d.text(560, 168, 'your code last.', { size: 12.5, color: 'ok' });
+  d.text(560, 208, 'The writable layer dies with the', { size: 12.5, color: 'bad' });
+  d.text(560, 226, 'container. Data goes in volumes.', { size: 12.5, color: 'bad' });
+  return figure(d, 'docker history shows these layers and their sizes. Ten containers from one image share its layers on disk; each only adds its own thin writable layer.');
+};
+
+D['container-ports'] = () => {
+  const d = mk(720, 250, 'Port publishing: docker-proxy on the host forwards host port 8080 to port 80 inside the container, on the container\'s own IP');
+  d.box(14, 90, 120, 56, 'browser', { sub: 'localhost:8080', color: 'accent', titleSize: 13 });
+  d.box(180, 20, 520, 214, '', { color: 'text', dash: '6 4' });
+  d.text(196, 42, 'your machine (the Docker host)', { anchor: 'start', size: 12.5, color: 'muted' });
+  d.box(200, 90, 150, 56, ':8080 docker-proxy', { sub: '-p 8080:80', color: 'info', titleSize: 12.5 });
+  d.box(410, 60, 270, 150, '', { color: 'main' });
+  d.text(424, 82, 'container web · 172.17.0.2', { anchor: 'start', size: 12.5, weight: 700 });
+  d.box(430, 100, 230, 40, 'nginx listening on 0.0.0.0:80', { color: 'ok', titleSize: 12 });
+  d.box(430, 154, 230, 40, 'app on 127.0.0.1:3000', { color: 'bad', titleSize: 12, sub: null });
+  d.arrow(136, 118, 196, 118, { color: 'text' });
+  d.arrow(352, 118, 426, 120, { color: 'ok', label: '→ :80', dy: -8, size: 11 });
+  d.text(545, 226, '127.0.0.1 inside = unreachable from outside', { size: 11.5, color: 'bad' });
+  return figure(d, 'Inside a container, localhost means the container itself. An app must listen on 0.0.0.0 to be reachable through a published port; otherwise curl gets "connection reset".');
+};
+
+D['container-network'] = () => {
+  const d = mk(720, 240, 'On a user-defined network, containers find each other by name through Docker\'s DNS; on the default bridge they cannot');
+  d.box(20, 30, 330, 190, '', { color: 'ok', dash: '6 4' });
+  d.text(36, 52, 'network: shop_default  (names resolve)', { anchor: 'start', size: 12.5, weight: 700, color: 'ok' });
+  d.box(40, 74, 130, 54, 'api', { sub: 'REDIS_URL=redis://cache', color: 'main', titleSize: 13, subSize: 10.5 });
+  d.box(200, 74, 130, 54, 'cache', { sub: 'redis :6379', color: 'info', titleSize: 13 });
+  d.box(120, 150, 130, 54, 'db', { sub: 'postgres :5432', color: 'info', titleSize: 13 });
+  d.arrow(172, 101, 196, 101, { color: 'ok' });
+  d.arrow(110, 130, 160, 148, { color: 'ok' });
+  d.box(390, 30, 310, 190, '', { color: 'muted', dash: '6 4' });
+  d.text(406, 52, 'default bridge  (IP only, no names)', { anchor: 'start', size: 12.5, weight: 700, color: 'muted' });
+  d.box(410, 90, 120, 54, 'app1', { color: 'main', titleSize: 13 });
+  d.box(560, 90, 120, 54, 'cache', { color: 'info', titleSize: 13 });
+  d.arrow(532, 117, 556, 117, { color: 'bad', dash: '4 4' });
+  d.text(545, 176, 'getaddrinfo ENOTFOUND cache', { size: 12, color: 'bad', font: 'mono' });
+  return figure(d, 'docker compose creates a network per project for you, which is why service names "just work" there. Only publish the ports humans need; services talk over the private network.');
+};
+
+D['compose'] = () => {
+  const d = mk(720, 230, 'docker compose turns one YAML file into networks, volumes and containers, started in dependency order');
+  d.box(20, 50, 190, 140, 'compose.yaml', { sub: 'services:\n  api  (build: .)\n  cache (redis)\n  db   (postgres)\nvolumes: pgdata', color: 'accent', titleSize: 14, subSize: 12 });
+  d.arrow(214, 120, 280, 120, { color: 'text', label: 'up -d', dy: -8 });
+  d.box(290, 30, 410, 180, '', { color: 'text', dash: '6 4' });
+  d.text(306, 52, 'project "shop"', { anchor: 'start', size: 12.5, weight: 700 });
+  d.box(310, 66, 110, 46, 'db', { sub: '1 · healthy', color: 'info', titleSize: 13 });
+  d.box(440, 66, 110, 46, 'cache', { sub: '2 · healthy', color: 'info', titleSize: 13 });
+  d.box(570, 66, 110, 46, 'api', { sub: '3 · started', color: 'main', titleSize: 13 });
+  d.box(310, 130, 170, 40, 'network shop_default', { color: 'ok', titleSize: 12 });
+  d.box(500, 130, 180, 40, 'volume shop_pgdata', { color: 'warn', titleSize: 12 });
+  d.text(495, 196, 'depends_on + healthchecks decide the order', { size: 12, color: 'muted' });
+  return figure(d, 'The file is the documentation: anyone can clone the repo and run the whole stack with one command. down removes containers and the network; only down -v deletes volumes.');
+};
+
+D['registry-flow'] = () => {
+  const d = mk(720, 210, 'Build once, tag, push to a registry, and every environment pulls the same image by tag or digest');
+  d.box(14, 70, 130, 64, 'build', { sub: 'app:1.4.2', color: 'main', titleSize: 13 });
+  d.box(196, 70, 170, 64, 'registry', { sub: 'ghcr.io/lumen/app\n:1.4.2  :sha-3f9c2e1', color: 'accent', titleSize: 13, subSize: 11 });
+  d.box(430, 20, 130, 56, 'staging', { sub: 'pull :1.4.2', color: 'feat', titleSize: 13 });
+  d.box(430, 128, 130, 56, 'production', { sub: 'pull @sha256:…', color: 'ok', titleSize: 13 });
+  d.box(600, 70, 110, 64, 'CI', { sub: 'docker login\n--password-stdin', color: 'info', titleSize: 13, subSize: 10.5 });
+  d.arrow(146, 102, 192, 102, { color: 'text', label: 'push', dy: -8 });
+  d.arrow(368, 92, 426, 52, { color: 'text', label: 'pull', dy: -4, size: 11 });
+  d.arrow(368, 112, 426, 154, { color: 'text', label: 'pull', dy: 14, size: 11 });
+  d.text(300, 200, ':latest is a moving label. Version tags and digests are what you deploy.', { size: 12.5, color: 'muted' });
+  return figure(d, 'A tag is a name you can move; a digest (sha256:…) names exact bytes. Deploy immutable tags so "what is running" always has one answer.');
+};
+
 export function renderDiagram(name) {
   const fn = D[name];
   if (!fn) return h('div', { class: 'figure' }, `Missing diagram: ${name}`);

@@ -173,6 +173,7 @@ export class Session {
     if (!this.stack.length) { io.out(C.dim('(this is your own machine: there is nothing to exit to)') + '\n'); return; }
     const prev = this.stack.pop();
     const how = this.e.loginKind;
+    try { this.e.onExit?.(); } catch (err) { console.error(err); }
     if (how === 'ssh') io.out(`logout\nConnection to ${this.e.host.name} closed.\n`);
     else if (how === 'exec') io.out('exit\n');
     else io.out('logout\n');
