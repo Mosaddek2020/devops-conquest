@@ -2,6 +2,7 @@
 import './cmd/core.js';
 import './cmd/text.js';
 import './cmd/jq.js';
+import './cmd/logrotate.js';
 import './cmd/system.js';
 import './cmd/net.js';
 import './cmd/gitcmd.js';

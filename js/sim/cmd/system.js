@@ -99,7 +99,7 @@ const rootOnly = (c, what = c.name) => c.user === 'root' ? null : c.fail(`${what
 
 def(['useradd', 'adduser'], c => {
   if (rootOnly(c) !== null) return 1;
-  const o = opts(c.args, { bool: ['-m', '-r', '--system', '--disabled-password', '-M', '--gecos'], val: ['-s', '--shell', '-G', '--groups', '-d', '--home', '-g', '-u', '-c', '--comment', '--ingroup'], alias: { '--shell': '-s', '--groups': '-G', '--home': '-d' } });
+  const o = opts(c.args, { bool: ['-m', '-r', '--system', '--disabled-password', '-M', '--gecos', '--no-create-home', '--create-home'], val: ['-s', '--shell', '-G', '--groups', '-d', '--home', '-g', '-u', '-c', '--comment', '--ingroup'], alias: { '--shell': '-s', '--groups': '-G', '--home': '-d' } });
   const name = o._[o._.length - 1];
   if (!name) return c.fail(`Usage: ${c.name} [options] LOGIN`, 2);
   if (c.host.users.has(name)) return c.fail(`${c.name}: user '${name}' already exists`, 9);
