@@ -52,19 +52,19 @@ function route() {
   if (!parts.length || parts[0] !== 'lesson' || !parts[3]) window.scrollTo(0, 0);
   else view.scrollIntoView({ block: 'start' });
   const titleBits = { path: 'Path', realm: 'Realm', lesson: 'Lesson', sandbox: 'Sandbox', guide: 'Field Guide', profile: 'Profile' };
-  document.title = parts.length ? `${titleBits[parts[0]] || 'Git Conquest'} · Git Conquest` : 'Git Conquest';
+  document.title = parts.length ? `${titleBits[parts[0]] || 'DevOps Conquest'} · DevOps Conquest` : 'DevOps Conquest';
 }
 
 function initTheme() {
   const btn = document.getElementById('themeToggle');
   let saved = null;
-  try { saved = localStorage.getItem('git-conquest:theme'); } catch { /* ignore */ }
+  try { saved = localStorage.getItem('devops-conquest:theme'); } catch { /* ignore */ }
   if (saved) document.documentElement.setAttribute('data-theme', saved);
   btn?.addEventListener('click', () => {
     const cur = document.documentElement.getAttribute('data-theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     const next = cur === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
-    try { localStorage.setItem('git-conquest:theme', next); } catch { /* ignore */ }
+    try { localStorage.setItem('devops-conquest:theme', next); } catch { /* ignore */ }
   });
 }
 

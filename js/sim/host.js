@@ -91,7 +91,7 @@ export class Host extends World {
     this.cpus = opts.cpus || 2;
     this.memMB = opts.memMB || 4096;
     this.diskGB = opts.diskGB || 40;
-    this.diskUsedGB = opts.diskUsedGB || 6.2;
+    this.baseDiskGB = opts.diskUsedGB || 6.2;
     // share the universe's git object store, GitHub and event log
     this.objects = uni.objects;
     this.remotes = uni.remotes;
@@ -135,7 +135,7 @@ export class Host extends World {
     this.writeSys('/etc/resolv.conf', 'nameserver 127.0.0.53\n');
     this.syncPasswd();
     this.addProc({ cmd: '/sbin/init', user: 'root', pid: 1, mem: 12 });
-    if (this.kind !== 'container') this.addProc({ cmd: '/usr/sbin/sshd -D', user: 'root', mem: 6, ports: [22], unit: 'ssh.service' });
+    if (this.kind === 'vm') this.addProc({ cmd: '/usr/sbin/sshd -D', user: 'root', mem: 6, ports: [22], unit: 'ssh.service' });
   }
 
   get time() { return this.uni ? this.uni.time : this._time; }
@@ -267,7 +267,17 @@ export class Host extends World {
     return this.defaultUser && p.startsWith('/home/') ? this.defaultUser : 'root';
   }
 
-  removeFile(p) { if (this.links.has(p)) { this.links.delete(p); this.meta.delete(p); return; } const r = this.links.size ? this.realPath(p) : p; this.files.delete(r); this.meta.delete(r); }
+  removeFile(p) {
+    if (this.links.has(p)) { this.links.delete(p); this.meta.delete(p); return; }
+    const r = this.links.size ? this.realPath(p) : p;
+    const size = this.fakeSizes?.get(r);
+    if (size) {
+      const holder = [...this.procs.values()].find(x => x.openFiles?.includes(r));
+      if (holder) (holder.deletedOpen = holder.deletedOpen || []).push({ path: r, bytes: size });
+      this.fakeSizes.delete(r);
+    }
+    Map.prototype.delete.call(this.files, r); this.meta.delete(r);
+  }
 
   lstat(p) {
     p = normPath(p);
@@ -335,6 +345,16 @@ export class Host extends World {
     this.journal.push({ time: this.time, unit, prio, msg });
     if (this.journal.length > 4000) this.journal.splice(0, 1000);
   }
+
+  // ---------- disk accounting ----------
+  // used = base system + every file with a (simulated) size + deleted files still held open
+  get diskUsedGB() {
+    let bytes = 0;
+    if (this.fakeSizes) for (const [p, n] of this.fakeSizes) if (Map.prototype.has.call(this.files, p)) bytes += n;
+    for (const p of this.procs?.values() || []) for (const d of p.deletedOpen || []) bytes += d.bytes;
+    return this.baseDiskGB + bytes / 1073741824;
+  }
+  set diskUsedGB(v) { this.baseDiskGB = v; }
 
   // ---------- misc ----------
   memUsedMB() { let m = 180; for (const p of this.procs.values()) m += p.mem || 0; return m; }

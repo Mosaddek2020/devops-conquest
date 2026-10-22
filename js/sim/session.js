@@ -147,6 +147,8 @@ export class Session {
     this.e.lastStatus = code;
     result.code = code;
     if (result.expanded) chunks.unshift(result.expanded + '\n');
+    if (code !== 0 && !/^\s*ai\b/.test(line)) this.lastFailure = { line, out: stripAnsi(chunks.join('')), code };
+    else if (code === 0 && !/^\s*ai\b/.test(line)) this.lastFailure = null;
     if (this.pendingAsync.length) chunks.push(this.pendingAsync.splice(0).join('\n') + '\n');
     result.out = toLines(chunks);
     if (this.advancePerCommand) this.uni.advance(this.advancePerCommand);
@@ -550,7 +552,7 @@ export class Session {
         if (!host.isDir(parent)) throw new SimError(`bash: ${target}: No such file or directory`, 1);
         if (!access(host, e.user, parent, 'w')) throw new SimError(`bash: ${target}: Permission denied`, 1);
       }
-      if (!append || !st) host.writeFile(abs, append && st ? host.files.get(abs) : '', e.user);
+      if (!append || !st) { host.writeFile(abs, append && st ? host.files.get(abs) : '', e.user); if (!append) host.fakeSizes?.delete(host.realPath(abs)); }
       const buf = [];
       flushes.push(() => { const cur = host.files.get(abs) ?? ''; host.writeFile(abs, cur + stripAnsi(buf.join('')), e.user); host.uni.emit({ type: 'file-write', host: host.name, path: abs }); });
       const w = s => buf.push(s);

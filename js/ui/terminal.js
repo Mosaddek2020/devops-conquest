@@ -2,11 +2,7 @@
 
 import { h, clear } from './dom.js';
 import { ansiToHtml } from './ansi.js';
-import { branchNames } from '../git/core.js';
-import { commands as gitCommands } from '../git/git.js';
-import { builtins } from '../git/shell.js';
-
-const GH_SUBS = { pr: ['create', 'list', 'view', 'checkout', 'merge', 'review', 'diff', 'checks', 'close', 'edit', 'comment', 'status'], issue: ['create', 'list', 'view', 'close', 'comment'], repo: ['create', 'clone', 'fork', 'view', 'list', 'sync'], release: ['create', 'list', 'view'], run: ['list', 'view'], auth: ['login', 'status', 'logout'], 'ssh-key': ['add', 'list'] };
+import { completionsFor } from '../sim/complete.js';
 
 export class Terminal {
   constructor(shell, { title = 'terminal', onCommand = null, welcome = [], suggestions = [], onReset = null, height = null } = {}) {
@@ -52,10 +48,11 @@ export class Terminal {
   }
 
   promptHtml() {
+    if (this.pendingAsk) return `<span class="s">${esc(this.pendingAsk.prompt || '>')}</span> `;
     const p = this.shell.prompt();
-    let s = `<span class="u">${p.user}@${p.host}</span>:<span class="p">${p.path}</span>`;
-    if (p.branch) s += ` <span class="b">(${p.branch}${p.dirty ? '*' : ''}${p.state ? '|' : ''}</span>${p.state ? `<span class="s">${p.state}</span>` : ''}<span class="b">)</span>`;
-    return s + '$ ';
+    let s = `<span class="${p.root ? 's' : 'u'}">${esc(p.user)}@${esc(p.host)}</span>:<span class="p">${esc(p.path)}</span>`;
+    if (p.branch) s += ` <span class="b">(${esc(p.branch)}${p.dirty ? '*' : ''}${p.state ? '|' : ''}</span>${p.state ? `<span class="s">${p.state}</span>` : ''}<span class="b">)</span>`;
+    return s + (p.root ? '# ' : '$ ');
   }
 
   updatePrompt() { this.promptEl.innerHTML = this.promptHtml(); }
@@ -79,7 +76,8 @@ export class Terminal {
     }
     let res;
     try {
-      res = this.shell.run(line);
+      if (this.pendingAsk) { const req = this.pendingAsk; this.pendingAsk = null; res = this.shell.resolveAsk(req, line); }
+      else res = this.shell.run(line);
     } catch (e) {
       console.error(e);
       this.print(`\x1b[31msimulator error: ${e.message}\x1b[0m`);
@@ -93,6 +91,7 @@ export class Terminal {
     for (const l of res.out) this.print(l);
     this.updatePrompt();
     if (res.editor) { this.openEditor(res.editor, line); return; }
+    if (res.ask) { this.pendingAsk = res.ask; this.updatePrompt(); }
     this.scroll.scrollTop = this.scroll.scrollHeight;
     if (this.onCommand) this.onCommand(line, res);
   }
@@ -178,28 +177,7 @@ export class Terminal {
     const v = this.input.value;
     const parts = v.split(/\s+/);
     const cur = parts[parts.length - 1];
-    const shell = this.shell;
-    let options = [];
-    if (parts.length === 1) options = ['git', 'gh', ...Object.keys(builtins)];
-    else if (parts[0] === 'git' && parts.length === 2) options = Object.keys(gitCommands);
-    else if (parts[0] === 'gh' && parts.length === 2) options = Object.keys(GH_SUBS);
-    else if (parts[0] === 'gh' && parts.length === 3) options = GH_SUBS[parts[1]] || [];
-    else {
-      const repo = shell.repo;
-      const refCmds = ['switch', 'checkout', 'merge', 'rebase', 'branch', 'log', 'diff', 'cherry-pick', 'reset', 'push', 'pull', 'show', 'tag', 'revert'];
-      if (parts[0] === 'git' && refCmds.includes(parts[1]) && repo) {
-        options.push(...branchNames(repo));
-        options.push(...Object.keys(repo.refs).filter(r => r.startsWith('refs/remotes/')).map(r => r.slice(13)));
-        options.push(...Object.keys(repo.refs).filter(r => r.startsWith('refs/tags/')).map(r => r.slice(10)));
-        if (['push', 'pull', 'fetch'].includes(parts[1])) options.push(...new Set(Object.keys(repo.config).filter(k => /^remote\..+\.url$/.test(k)).map(k => k.split('.')[1])));
-      }
-      // paths
-      const slash = cur.lastIndexOf('/');
-      const dirPart = slash >= 0 ? cur.slice(0, slash + 1) : '';
-      const abs = shell.resolvePath(dirPart || '.');
-      const entries = shell.listVirtual(abs) || shell.world.listDir(abs);
-      options.push(...entries.map(([n, kind]) => dirPart + n + (kind === 'dir' ? '/' : '')));
-    }
+    const options = completionsFor(this.shell, parts);
     const matches = [...new Set(options)].filter(o => o.startsWith(cur)).sort();
     if (!matches.length) return;
     if (matches.length === 1) {
@@ -213,6 +191,8 @@ export class Terminal {
     const l = h('div', { class: 'term-line term-echo' });
     l.innerHTML = this.promptHtml() + ansiToHtml(v);
     this.scroll.append(l);
-    this.print(matches.slice(0, 40).join('  '));
+    this.print(matches.slice(0, 60).join('  '));
   }
 }
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);

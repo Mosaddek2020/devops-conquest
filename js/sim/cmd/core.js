@@ -667,6 +667,26 @@ def('help', c => {
   return 0;
 });
 
+def('truncate', c => {
+  const o = opts(c.args, { bool: ['-c'], val: ['-s', '--size'] });
+  const size = o['-s'] ?? o['--size'];
+  if (size === undefined) return c.fail("truncate: you must specify either '--size' or '--reference'", 1);
+  const f = fsx(c);
+  let code = 0;
+  for (const p of o._) {
+    try {
+      const a = f.abs(p);
+      if (!c.host.stat(a)) { if (o['-c']) continue; f.write(p, ''); continue; }
+      if (!access(c.host, c.user, a, 'w')) throw new SimError(`truncate: cannot open '${p}' for writing: Permission denied`);
+      c.host.writeFile(a, String(size) === '0' ? '' : c.host.files.get(a), c.user);
+      if (String(size) === '0') c.host.fakeSizes?.delete(c.host.realPath(a));
+      else { const m = String(size).match(/^(\d+)([KMG]?)$/); if (m) { c.host.fakeSizes = c.host.fakeSizes || new Map(); c.host.fakeSizes.set(c.host.realPath(a), Number(m[1]) * ({ K: 1024, M: 1048576, G: 1073741824 }[m[2]] || 1)); } }
+      c.uni.emit({ type: 'truncate', host: c.host.name, path: a, size: String(size) });
+    } catch (e) { c.eprint(e.message); code = 1; }
+  }
+  return code;
+});
+
 // ---------- bash / sh as commands ----------
 def(['bash', 'sh', 'dash', 'zsh'], c => {
   const a = [...c.args];

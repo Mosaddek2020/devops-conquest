@@ -286,6 +286,14 @@ def(['pkill', 'killall', 'pgrep', 'pidof'], c => {
 }, { always: true });
 
 def('lsof', c => {
+  if (c.args.includes('+L1') || c.args.join(' ').includes('deleted')) {
+    if (c.user !== 'root') return 1;
+    const rows = [...c.host.procs.values()].flatMap(p => (p.deletedOpen || []).map(d => [p, d]));
+    if (!rows.length) return 1;
+    c.print('COMMAND    PID   USER   FD   TYPE DEVICE   SIZE/OFF NLINK  NODE NAME');
+    for (const [p, d] of rows) c.print(`${p.cmd.split(' ')[0].split('/').pop().slice(0, 9).padEnd(9)} ${String(p.pid).padStart(5)} ${p.user.padStart(6)}    3w   REG  252,1 ${String(d.bytes).padStart(10)}     0 131075 ${d.path} (deleted)`);
+    return 0;
+  }
   const iArg = c.args.find(a => a.startsWith('-i'));
   const port = iArg ? Number((iArg.match(/:(\d+)/) || c.args.join(' ').match(/:(\d+)/) || [])[1]) : null;
   if (c.user !== 'root') { if (port) return 1; }

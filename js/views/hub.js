@@ -1,6 +1,7 @@
-// The world map: the curriculum drawn as a 3D commit graph. Each realm is a merge commit on
-// `main`; its lessons are commits on a feature branch that merges into it. HEAD hovers over
-// your current lesson.
+// The world map: the curriculum drawn as the DevOps infinity loop in 3D. Realms are stations
+// on the loop; each realm's lessons arc between the previous station and its own. The
+// loop's phases float around it, an AI core glows where the loop crosses itself, and a
+// marker hovers over your current lesson.
 
 import { h, clear, ring, toast, cssVar } from '../ui/dom.js';
 import { curriculum } from '../curriculum.js';
@@ -21,9 +22,9 @@ export function renderHub() {
     const st = getState();
     const mastered = curriculum.order.filter(isMastered).length;
     panel.append(
-      h('p', { class: 'eyebrow', style: { margin: 0 } }, 'Zero to hero in Git & GitHub'),
-      h('h1', {}, 'Conquer version control, one commit at a time.'),
-      h('p', { class: 'lede', style: { margin: 0 } }, 'Each lesson teaches one idea from several angles, drills it in a real git simulator, then makes you prove it. Master it and the next commit on the map lights up.'));
+      h('p', { class: 'eyebrow', style: { margin: 0 } }, 'Zero to hero · DevOps in the age of AI'),
+      h('h1', {}, 'Run the whole loop, from first command to production.'),
+      h('p', { class: 'lede', style: { margin: 0 } }, 'Each lesson teaches one idea from several angles, drills it on simulated servers, pipelines, containers and clusters, then makes you prove it. Master it and the next station on the loop lights up.'));
     if (cur) {
       const l = curriculum.byId[cur];
       const r = curriculum.realmOf[cur];
@@ -69,7 +70,8 @@ export function renderHub() {
       h('div', { class: 'hub-legend', 'aria-hidden': 'true' },
         h('span', {}, h('i', { style: { background: 'var(--accent)' } }), 'mastered'),
         h('span', {}, h('i', { style: { background: 'var(--main)' } }), 'open'),
-        h('span', {}, h('i', { style: { background: 'var(--line-strong)' } }), 'locked')),
+        h('span', {}, h('i', { style: { background: 'var(--line-strong)' } }), 'locked'),
+        h('span', {}, h('i', { style: { background: 'var(--remote)' } }), 'AI core')),
       h('div', { class: 'hub-hint', 'aria-hidden': 'true' }, 'drag to orbit · scroll to zoom · click a realm'));
   } catch (e) {
     console.error(e);
@@ -95,8 +97,8 @@ class World3D {
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
     this.target = new THREE.Vector3(0, 0, 0);
     this.goalTarget = this.target.clone();
-    this.sph = { theta: -0.5, phi: 1.05, r: 46 };
-    this.goalR = 46;
+    this.sph = { theta: -0.3, phi: 0.95, r: 58 };
+    this.goalR = 58;
     this.nodes = [];
     this.labels = [];
     this.build();
@@ -126,7 +128,7 @@ class World3D {
     const C = this.colors();
     this.C = C;
     this.scene.background = C.bg;
-    this.scene.fog = new THREE.Fog(C.bg, 60, 140);
+    this.scene.fog = new THREE.Fog(C.bg, 70, 160);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.65));
     const dl = new THREE.DirectionalLight(0xffffff, 0.7);
     dl.position.set(10, 20, 15);
@@ -143,47 +145,70 @@ class World3D {
     this.stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: C.muted, size: 0.35, transparent: true, opacity: 0.7 }));
     this.scene.add(this.stars);
 
-    // realm positions along a gentle S-curve
+    // the DevOps loop: a lemniscate (∞) with a gentle wave
     const N = curriculum.realms.length;
-    const realmPos = curriculum.realms.map((r, i) => new THREE.Vector3((i - (N - 1) / 2) * 7.2, Math.sin(i * 0.7) * 2.2, Math.sin(i * 0.95) * 7));
-    const origin = realmPos[0].clone().add(new THREE.Vector3(-7.2, 0, -2));
+    const A = 26;
+    const loopAt = (u) => { const t = u * Math.PI * 2; const d = 1 + Math.sin(t) ** 2; return new THREE.Vector3(A * Math.cos(t) / d, Math.sin(t * 2) * 1.6, A * Math.sin(t) * Math.cos(t) / d * 1.25); };
+    const realmU = curriculum.realms.map((r, i) => 0.02 + (i / N));
+    const realmPos = realmU.map(loopAt);
+    const origin = loopAt(0.02 - 0.5 / N);
     this.realmPos = realmPos;
+    this.origin = origin;
 
     const cur = currentLessonId();
-    const tube = (points, color, radius, opacity = 1) => {
-      const curve = new THREE.CatmullRomCurve3(points, false, 'centripetal');
-      const geo = new THREE.TubeGeometry(curve, Math.max(8, points.length * 10), radius, 8, false);
+    const tube = (points, color, radius, opacity = 1, closed = false) => {
+      const curve = new THREE.CatmullRomCurve3(points, closed, 'centripetal');
+      const geo = new THREE.TubeGeometry(curve, Math.max(8, points.length * 10), radius, 8, closed);
       const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25, roughness: 0.6, transparent: opacity < 1, opacity }));
       this.scene.add(m);
       return m;
     };
-    // main line (dim where not yet reached)
-    const mainPts = [origin, ...realmPos];
-    for (let i = 0; i < mainPts.length - 1; i++) {
-      const done = i > 0 ? curriculum.realms[i - 1].lessons.every(l => isMastered(l.id)) && curriculum.realms[i].lessons.every(l => isMastered(l.id)) : curriculum.realms[0].lessons.every(l => isMastered(l.id));
-      const seg = tube([mainPts[i], mainPts[i + 1]], done ? C.accent : C.main, 0.12, done ? 1 : 0.55);
-      seg.userData.kind = 'line';
+    // the full loop, faint, then the travelled part bright
+    const loopPts = Array.from({ length: 160 }, (_, k) => loopAt(k / 160));
+    tube(loopPts, C.line, 0.07, 0.45, true);
+    let reached = 0;
+    curriculum.realms.forEach((r, i) => { if (r.lessons.every(l => isMastered(l.id))) reached = i + 1; });
+    if (reached > 0) {
+      const endU = realmU[reached - 1];
+      const startU = 0.02 - 0.5 / N;
+      const pts = Array.from({ length: 80 }, (_, k) => loopAt(startU + (endU - startU) * k / 79));
+      tube(pts, C.accent, 0.16, 1);
     }
-    // root node
+    // phases of the loop floating around it
+    ['PLAN', 'CODE', 'BUILD', 'TEST', 'RELEASE', 'DEPLOY', 'OPERATE', 'MONITOR'].forEach((ph, k) => {
+      const p = loopAt(0.06 + k / 8).multiplyScalar(1.22).add(new THREE.Vector3(0, 4.2, 0));
+      this.addLabel({ text: ph, pos: p, kind: 'phase' });
+    });
+    // AI core at the crossing
+    const coreColor = C.remote;
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.5, 1), new THREE.MeshStandardMaterial({ color: coreColor, emissive: coreColor, emissiveIntensity: 0.55, roughness: 0.3, flatShading: true, transparent: true, opacity: 0.85 }));
+    core.position.set(0, 0, 0);
+    core.userData.core = true;
+    this.scene.add(core);
+    const coreRing = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.03, 8, 64), new THREE.MeshBasicMaterial({ color: coreColor, transparent: true, opacity: 0.5 }));
+    coreRing.userData.spin = true;
+    coreRing.rotation.x = Math.PI / 2.4;
+    this.scene.add(coreRing);
+    this.addLabel({ text: 'AI · assists every phase', pos: new THREE.Vector3(0, -2.6, 0), kind: 'root' });
+    // start node
     const rootMesh = new THREE.Mesh(new THREE.SphereGeometry(0.55, 24, 16), new THREE.MeshStandardMaterial({ color: C.main, emissive: C.main, emissiveIntensity: 0.4 }));
     rootMesh.position.copy(origin);
     this.scene.add(rootMesh);
-    this.addLabel({ text: 'git init', pos: origin, kind: 'root' });
+    this.addLabel({ text: 'start', pos: origin, kind: 'root' });
 
     curriculum.realms.forEach((realm, ri) => {
-      const from = ri === 0 ? origin : realmPos[ri - 1];
+      const fromU = ri === 0 ? 0.02 - 0.5 / N : realmU[ri - 1];
+      const toU = realmU[ri];
       const to = realmPos[ri];
       const unlocked = realmUnlocked(realm);
       const allDone = realm.lessons.every(l => isMastered(l.id));
-      const side = ri % 2 ? -1 : 1;
-      const lift = new THREE.Vector3(0, 3.2 + (ri % 3) * 0.6, side * 2.4);
       const n = realm.lessons.length;
+      const lift = new THREE.Vector3(0, 3.0 + (ri % 3) * 0.5, 0);
       const lessonPts = realm.lessons.map((l, li) => {
         const t = (li + 1) / (n + 1);
-        const p = from.clone().lerp(to, t).add(lift.clone().multiplyScalar(Math.sin(Math.PI * Math.min(0.92, Math.max(0.08, t))) * 1.15));
-        return p;
+        return loopAt(fromU + (toU - fromU) * t).add(lift.clone().multiplyScalar(Math.sin(Math.PI * t) * 1.0));
       });
-      tube([from, ...lessonPts, to], unlocked ? (allDone ? C.accent : C.feat) : C.line, 0.06, unlocked ? 0.9 : 0.35);
+      tube([loopAt(fromU), ...lessonPts, to], unlocked ? (allDone ? C.accent : C.feat) : C.line, 0.05, unlocked ? 0.9 : 0.3);
       realm.lessons.forEach((l, li) => {
         const mastered = isMastered(l.id);
         const open = isUnlocked(l.id);
@@ -203,7 +228,6 @@ class World3D {
       mesh.userData = { kind: 'realm', id: realm.id, state: allDone ? 'done' : unlocked ? 'open' : 'locked' };
       this.scene.add(mesh);
       this.nodes.push(mesh);
-      // halo ring
       const ringM = new THREE.Mesh(new THREE.TorusGeometry(1.45, 0.04, 8, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: unlocked ? 0.7 : 0.25 }));
       ringM.position.copy(to);
       ringM.rotation.x = Math.PI / 2;
@@ -229,7 +253,7 @@ class World3D {
         if (kind === 'realm') { this.focus(id, true); }
         else if (kind === 'lesson') this.onLesson(id);
       },
-    }, current ? `HEAD → ${text}` : text);
+    }, current ? `YOU → ${text}` : text);
     this.labelLayer.append(el);
     this.labels.push({ el, pos: pos.clone(), kind, realm, id });
   }
@@ -239,7 +263,7 @@ class World3D {
     if (i < 0) return;
     this.focused = realmId;
     const p = this.realmPos[i].clone();
-    const prev = i > 0 ? this.realmPos[i - 1] : this.realmPos[0].clone().add(new THREE.Vector3(-7.2, 0, -2));
+    const prev = i > 0 ? this.realmPos[i - 1] : this.origin;
     this.goalTarget = p.clone().lerp(prev, 0.45).add(new THREE.Vector3(0, 1.5, 0));
     this.goalR = r;
     if (announce) this.onRealm?.(realmId);
@@ -333,7 +357,7 @@ class World3D {
     this.camera.position.set(this.target.x + r * Math.sin(phi) * Math.sin(theta), this.target.y + r * Math.cos(phi), this.target.z + r * Math.sin(phi) * Math.cos(theta));
     this.camera.lookAt(this.target);
     if (this.head && this.headPos) { this.head.position.set(this.headPos.x, this.headPos.y + 1.1 + (this.reduced ? 0 : Math.sin(t * 2.2) * 0.15), this.headPos.z); this.head.rotation.y = t; }
-    this.scene.traverse(o => { if (o.userData?.spin && !this.reduced) o.rotation.z = t * 0.3; });
+    this.scene.traverse(o => { if (o.userData?.spin && !this.reduced) o.rotation.z = t * 0.3; if (o.userData?.core && !this.reduced) { o.rotation.y = t * 0.4; o.rotation.x = t * 0.15; } });
     this.renderer.render(this.scene, this.camera);
     // labels
     const w = this.stage.clientWidth, hgt = this.stage.clientHeight;
@@ -341,6 +365,7 @@ class World3D {
     for (const l of this.labels) {
       v.copy(l.pos).project(this.camera);
       const visible = v.z < 1 && (l.kind !== 'lesson' || l.realm === this.focused || l.el.classList.contains('is-current'));
+      if (l.kind === 'phase') { l.el.style.pointerEvents = 'none'; }
       const dist = this.camera.position.distanceTo(l.pos);
       if (!visible || Math.abs(v.x) > 1.1 || Math.abs(v.y) > 1.1) { l.el.style.display = 'none'; continue; }
       if (l.kind === 'lesson' && dist > 34 && !l.el.classList.contains('is-current')) { l.el.style.display = 'none'; continue; }

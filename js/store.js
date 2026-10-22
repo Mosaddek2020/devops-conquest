@@ -5,21 +5,25 @@
 import { curriculum } from './curriculum.js';
 import { toast } from './ui/dom.js';
 
-const KEY = 'git-conquest:v1';
+const KEY = 'devops-conquest:v1';
 export const PASS_MARK = 0.8;
 
 export const RANKS = [
-  { xp: 0, name: 'Untracked', blurb: 'Git does not know you yet.' },
-  { xp: 150, name: 'Staged', blurb: 'Ready to be committed.' },
-  { xp: 450, name: 'Committed', blurb: 'Your first snapshots are history.' },
-  { xp: 900, name: 'Time Traveller', blurb: 'You can move through history and undo safely.' },
-  { xp: 1500, name: 'Brancher', blurb: 'Parallel universes hold no fear.' },
-  { xp: 2200, name: 'Merger', blurb: 'You bring work together and settle conflicts.' },
-  { xp: 3000, name: 'Rebaser', blurb: 'You shape history with care.' },
-  { xp: 3900, name: 'Pusher', blurb: 'Your work lives on remotes.' },
-  { xp: 4900, name: 'Collaborator', blurb: 'Pull requests and reviews are second nature.' },
-  { xp: 6000, name: 'Maintainer', blurb: 'You run projects other people contribute to.' },
-  { xp: 7400, name: 'Git Hero', blurb: 'Zero to hero: the whole map is yours.' },
+  { xp: 0, name: 'Newcomer', blurb: 'Every expert started with an empty terminal.' },
+  { xp: 200, name: 'Shell Dweller', blurb: 'The command line feels like home.' },
+  { xp: 650, name: 'Sysadmin Apprentice', blurb: 'Users, permissions and processes answer to you.' },
+  { xp: 1300, name: 'Network Navigator', blurb: 'Ports, DNS and TLS hold no mysteries.' },
+  { xp: 2100, name: 'Service Keeper', blurb: 'Your services start, restart and log properly.' },
+  { xp: 3000, name: 'Automator', blurb: 'If you did it twice, you scripted it.' },
+  { xp: 4000, name: 'Pipeline Builder', blurb: 'Every change flows through your pipelines.' },
+  { xp: 5100, name: 'Container Captain', blurb: 'You ship software in tidy, small images.' },
+  { xp: 6300, name: 'Cluster Pilot', blurb: 'Kubernetes does what you tell it.' },
+  { xp: 7600, name: 'Infra Coder', blurb: 'Your infrastructure lives in version control.' },
+  { xp: 8900, name: 'Observer', blurb: 'You see problems before users do.' },
+  { xp: 10100, name: 'Incident Commander', blurb: 'Calm in the storm, blameless after it.' },
+  { xp: 11300, name: 'Guardian', blurb: 'Security is built in, not bolted on.' },
+  { xp: 12500, name: 'AI Ops Pilot', blurb: 'You use AI as a power tool, with guardrails.' },
+  { xp: 13700, name: 'DevOps Hero', blurb: 'Zero to hero: the whole loop is yours.' },
 ];
 
 export const XP = { lens: 5, lab: 60, quiz: 50, perfect: 20, boss: 120, testOut: 40 };
@@ -178,7 +182,7 @@ export function testOutRealm(realm) {
 export const BADGES = [
   { id: 'first-lab', title: 'Hands on the keys', desc: 'Finish your first lab.' },
   { id: 'first-mastery', title: 'First mastery', desc: 'Master your first lesson.' },
-  { id: 'perfect', title: 'Clean history', desc: 'Score 100% on a quiz at the first attempt.' },
+  { id: 'perfect', title: 'Zero defects', desc: 'Score 100% on a quiz at the first attempt.' },
   { id: 'sandbox', title: 'Free explorer', desc: 'Run 25 commands in the Sandbox.' },
   { id: 'reviewer', title: 'Spaced repetition', desc: 'Clear 5 questions from your review deck.' },
   { id: 'streak-3', title: 'Three-day streak', desc: 'Practise on three different days.' },

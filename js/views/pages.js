@@ -5,11 +5,11 @@ import { renderMarkdown } from '../ui/markdown.js';
 import { curriculum } from '../curriculum.js';
 import { Quiz } from '../ui/quiz.js';
 import { Terminal } from '../ui/terminal.js';
-import { GraphView } from '../ui/graph.js';
-import { AreasView, FilesView, GitHubView } from '../ui/panels.js';
-import { World } from '../git/world.js';
-import { Shell } from '../git/shell.js';
-import { makeHelpers } from '../lab.js';
+import { GitHubView } from '../ui/panels.js';
+import { SystemView, FileTreeView, NetworkView } from '../ui/devpanels.js';
+import { extraPanels } from '../ui/panelRegistry.js';
+import { buildLabWorld } from '../lab.js';
+import { SCENARIOS } from '../content/sandbox.js';
 import {
   isMastered, isUnlocked, realmProgress, realmUnlocked, lessonState, currentLessonId, getState, RANKS, rankFor, nextRank,
   BADGES, testOutRealm, resetAll, clearMissed, bumpSandbox, grant, PASS_MARK,
@@ -34,7 +34,7 @@ export function renderPath() {
   const done = curriculum.order.filter(isMastered).length;
   page.append(
     h('p', { class: 'eyebrow' }, 'The path'),
-    h('h1', { style: { fontSize: 'var(--step-4)', fontWeight: 800, letterSpacing: '-.025em' } }, 'From git init to Git Hero'),
+    h('h1', { style: { fontSize: 'var(--step-4)', fontWeight: 800, letterSpacing: '-.025em' } }, 'From first command to DevOps Hero'),
     h('p', { class: 'lede' }, `${curriculum.realms.length} realms, ${total} lessons. Each lesson: learn it from several angles, practise it in the simulator, prove it in a quiz. ${done ? `You have mastered ${done} of ${total}.` : 'Start at the top. Already experienced? Each realm has a test-out exam.'}`));
   const grid = h('div', { class: 'path-grid' });
   for (const r of curriculum.realms) {
@@ -92,94 +92,40 @@ export function renderRealm(id) {
   return page;
 }
 
-const SCENARIOS = {
-  empty: { title: 'Empty home folder', setup: () => {}, cwd: '~', note: 'Nothing here yet. Try: mkdir demo && cd demo && git init' },
-  repo: {
-    title: 'A small project with history',
-    cwd: '~/garden',
-    setup: (H) => {
-      H.repo('~/garden');
-      H.commit('Plant the seed: project skeleton', { 'README.md': '# Garden\nA tiny plant tracker.\n', 'garden.js': 'const plants = [];\nmodule.exports = { plants };\n' });
-      H.commit('Add watering schedule', { 'water.js': 'export function water(p) {\n  return p.thirsty ? "water now" : "wait";\n}\n' });
-      H.run('git switch -q -c feature/sunlight');
-      H.commit('Track sunlight hours', { 'sun.js': 'export const hours = 6;\n' });
-      H.run('git switch -q main');
-      H.commit('Explain watering in README', { 'README.md': '# Garden\nA tiny plant tracker.\n\nWater when the soil is dry.\n' });
-      H.run('git tag v0.1.0');
-    },
-    note: 'A repo with main, a feature branch and a tag. Try: git log --oneline --graph --all',
-  },
-  team: {
-    title: 'Team project on GitHub',
-    cwd: '~',
-    setup: (H) => {
-      H.remote('acme', 'storefront', [
-        { message: 'Initial commit', files: { 'README.md': '# Storefront\n', 'index.html': '<h1>Shop</h1>\n' } },
-        { message: 'Add product grid', files: { 'grid.js': 'export const columns = 3;\n' } },
-      ], { collaborators: ['you'], description: 'The ACME web shop' });
-      H.world.remotes.get('https://github.com/acme/storefront.git').meta.collaborators.push('you');
-    },
-    note: 'acme/storefront exists on GitHub and you can push to it. Try: git clone https://github.com/acme/storefront.git',
-  },
-  conflict: {
-    title: 'Merge conflict waiting to happen',
-    cwd: '~/menu',
-    setup: (H) => {
-      H.repo('~/menu');
-      H.commit('Add menu', { 'menu.txt': 'Soup: tomato\nMain: pasta\nDessert: cake\n' });
-      H.run('git switch -q -c chef-special');
-      H.commit('Make dessert special', { 'menu.txt': 'Soup: tomato\nMain: pasta\nDessert: crème brûlée\n' });
-      H.run('git switch -q main');
-      H.commit('Cheaper dessert', { 'menu.txt': 'Soup: tomato\nMain: pasta\nDessert: fruit salad\n' });
-    },
-    note: 'Two branches changed the same line. Try: git merge chef-special',
-  },
-};
-
 export function renderSandbox() {
   const page = h('div', { class: 'page', style: { maxWidth: '1400px' } });
   page.append(h('p', { class: 'eyebrow' }, 'Sandbox'), h('h1', { style: { fontSize: 'var(--step-3)', fontWeight: 800 } }, 'Break things. Nothing here is real.'),
-    h('p', { class: 'lede', style: { marginBottom: '14px' } }, 'A full git simulator with a pretend GitHub. Pick a starting point, then experiment freely: every command updates the panels on the right.'));
+    h('p', { class: 'lede', style: { marginBottom: '14px' } }, 'Simulated machines, networks and pipelines. Pick a starting point, then experiment freely: every command updates the panels on the right.'));
   const row = h('div', { class: 'scenario-row', style: { marginBottom: '14px' } });
   const noteEl = h('p', { style: { color: 'var(--muted)', margin: '0 0 12px' } });
   const grid = h('div', { class: 'sandbox-grid' });
   page.append(row, noteEl, grid);
-  let active = 'repo';
+  let active = Object.keys(SCENARIOS)[1] || Object.keys(SCENARIOS)[0];
   const load = (key) => {
     active = key;
     for (const b of row.querySelectorAll('button')) b.classList.toggle('btn-primary', b.dataset.k === key);
     clear(grid);
     const sc = SCENARIOS[key];
     noteEl.textContent = sc.note;
-    const world = new World();
-    const shell = new Shell(world);
-    const H = makeHelpers(world, shell);
-    sc.setup(H);
-    shell.cwd = shell.resolvePath(sc.cwd);
-    const graph = new GraphView(), areas = new AreasView(), files = new FilesView();
+    const { uni, sh } = buildLabWorld(sc);
     const tabs = h('div', { class: 'panel-tabs', role: 'tablist' });
     const body = h('div', { class: 'panel-body' });
-    let tab = 'graph';
-    const gh = new GitHubView({ onAction: (m, err) => { term.print(`\x1b[${err ? 31 : 35}m[GitHub] ${m}\x1b[0m`); refresh(); } });
-    const views = { graph: ['Commit graph', graph], areas: ['Three areas', areas], files: ['Files', files], github: ['GitHub', gh] };
-    const refresh = () => {
-      const repo = shell.repo;
-      try {
-        if (tab === 'graph') graph.render(repo);
-        if (tab === 'areas') areas.render(repo);
-        if (tab === 'files') files.render(repo, shell);
-        if (tab === 'github') gh.render(repo, shell);
-      } catch (e) { console.error(e); }
-    };
+    const onAction = (m, err) => { term.print(`\x1b[${err ? 31 : 35}m[GitHub] ${m}\x1b[0m`); refresh(); };
+    const views = { system: ['System', new SystemView()], files: ['Files', new FileTreeView()], network: ['Network', new NetworkView()], github: ['GitHub', new GitHubView({ onAction })] };
+    for (const [k, make] of Object.entries(extraPanels)) views[k] = [make.label, make.create({ onAction, lab: null })];
+    const names = (sc.panels || ['system', 'files', 'network']).filter(n => views[n]);
+    let tab = names[0];
+    const refresh = () => { const v = views[tab][1]; try { if (v instanceof GitHubView) v.render(sh.repo, sh); else v.render(sh, uni); } catch (e) { console.error(e); } };
     const setTab = (k) => { tab = k; for (const b of tabs.children) b.setAttribute('aria-selected', String(b.dataset.p === k)); clear(body); body.append(views[k][1].el); refresh(); };
-    for (const k of Object.keys(views)) tabs.append(h('button', { type: 'button', role: 'tab', dataset: { p: k }, onclick: () => setTab(k) }, views[k][0]));
-    const term = new Terminal(shell, {
+    for (const k of names) tabs.append(h('button', { type: 'button', role: 'tab', dataset: { p: k }, onclick: () => setTab(k) }, views[k][0]));
+    const term = new Terminal(sh, {
       title: 'sandbox — bash',
-      welcome: [sc.note, 'Type `help` for shell commands, `git help` for git, `gh help` for GitHub.'],
+      welcome: [sc.note, 'Type `help` for the commands the simulator knows.'],
       onCommand: () => { refresh(); bumpSandbox(); },
+      onReset: () => load(key),
     });
     grid.append(term.el, h('div', { class: 'panel' }, tabs, body));
-    setTab(key === 'team' ? 'github' : 'graph');
+    setTab(tab);
     setTimeout(() => term.focus(), 30);
   };
   for (const [k, sc] of Object.entries(SCENARIOS)) row.append(h('button', { class: 'btn btn-sm', type: 'button', dataset: { k }, onclick: () => load(k) }, sc.title));

@@ -340,6 +340,25 @@ def('service', c => {
 def('journalctl', c => {
   const o = opts(c.args, { bool: ['-f', '-x', '-e', '-xe', '--no-pager', '-r', '-k', '-b', '--follow', '-q'], val: ['-u', '--unit', '-n', '--lines', '--since', '--until', '-p', '--priority', '-t', '-o'], alias: { '--unit': '-u', '--lines': '-n', '--priority': '-p', '--follow': '-f' } });
   const host = c.host;
+  const vac = c.args.find(a => a.startsWith('--vacuum-size') || a.startsWith('--vacuum-time'));
+  if (vac) {
+    if (c.user !== 'root') return c.fail('Failed to open journal directory: Permission denied', 1);
+    const files = [...(host.fakeSizes || new Map())].filter(([p]) => p.startsWith('/var/log/journal/'));
+    const total = files.reduce((t, [, n]) => t + n, 0);
+    const m = vac.match(/=(\d+(?:\.\d+)?)([KMG])?/);
+    const target = vac.startsWith('--vacuum-size') && m ? Number(m[1]) * ({ K: 1024, M: 1048576, G: 1073741824 }[m[2] || 'M']) : total * 0.08;
+    let freed = 0;
+    for (const [p, n] of files.sort((a, b) => a[0].localeCompare(b[0]))) {
+      if (total - freed <= target) break;
+      if (p.endsWith('/system.journal')) continue;
+      c.print(`Deleted archived journal ${p} (${(n / 1073741824).toFixed(1)}G).`);
+      host.fakeSizes.delete(p); Map.prototype.delete.call(host.files, p); freed += n;
+    }
+    c.print(`Vacuuming done, freed ${(freed / 1073741824).toFixed(1)}G of archived journals from /var/log/journal/${'a1b2c3d4e5f6'}.`);
+    c.uni.emit({ type: 'journal-vacuum', host: host.name, freed });
+    return 0;
+  }
+  if (c.args.includes('--disk-usage')) { const tot = [...(host.fakeSizes || new Map())].filter(([p]) => p.startsWith('/var/log/journal/')).reduce((t, [, n]) => t + n, 0); c.print(`Archived and active journals take up ${(tot / 1073741824).toFixed(1)}G in the file system.`); return 0; }
   if (c.user !== 'root' && !host.userGroups(c.user).some(g => ['adm', 'systemd-journal', 'sudo'].includes(g))) c.eprint('Hint: You are currently not seeing messages from other users and the system.\n      Users in groups \'adm\', \'systemd-journal\' can see all messages.');
   let entries = host.journal;
   const units = c.args.reduce((acc, a, k) => (a === '-u' || a === '--unit') ? acc.concat(unitName(c.args[k + 1])) : acc, []);
