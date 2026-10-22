@@ -112,7 +112,7 @@ export class Host extends World {
     this.defaultUser = user;
     this.home = user === 'root' ? '/root' : `/home/${user}`;
     this.dirs = new Set(['/']);
-    for (const d of ['/bin', '/usr', '/usr/bin', '/usr/local', '/usr/local/bin', '/etc', '/etc/systemd', '/etc/systemd/system', '/var', '/var/log', '/var/lib', '/tmp', '/opt', '/home', '/root', '/srv', '/proc', '/dev', '/run', '/etc/logrotate.d', '/etc/cron.d', '/var/backups', '/var/lib', '/var/tmp']) this.mkdirMeta(d, 'root', 0o755);
+    for (const d of ['/bin', '/usr', '/usr/bin', '/usr/local', '/usr/local/bin', '/etc', '/etc/systemd', '/etc/systemd/system', '/var', '/var/log', '/var/lib', '/tmp', '/opt', '/home', '/root', '/srv', '/proc', '/dev', '/run', '/etc/logrotate.d', '/etc/cron.d', '/etc/profile.d', '/etc/ssl', '/var/mail', '/var/backups', '/var/lib', '/var/tmp']) this.mkdirMeta(d, 'root', 0o755);
     this.meta.get('/tmp').mode = 0o1777;
     this.meta.get('/root').mode = 0o700;
     this.addUser('root', { ...DEFAULT_USERS.root, noHome: true });

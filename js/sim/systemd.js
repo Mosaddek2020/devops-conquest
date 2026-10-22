@@ -98,7 +98,12 @@ export function startUnit(host, uni, name, { quiet = false } = {}) {
     r = { ok: true, proc, logs: [] };
   } else {
     r = launch(host, argv, { uni, user, env: envr.env, cwd, unit: name, logSink: line => host.log(name, line) });
-    if (!r.ok) return fail(r.logs, r.code);
+    if (!r.ok) {
+      // the process started and then exited: for Type=simple, `systemctl start` still succeeds;
+      // the failure shows up in status and the journal (and Restart= kicks in)
+      const f = fail(r.logs, r.code);
+      return /^(forking|oneshot|notify)$/.test(svc.Type || '') ? f : { ok: true, crashed: true };
+    }
   }
   for (const l of r.logs) host.log(name, l);
   st.active = 'active'; st.sub = r.oneShot ? 'exited' : 'running'; st.pid = r.proc?.pid || null; st.since = host.time; st.result = 'success';

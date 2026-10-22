@@ -149,6 +149,7 @@ def('curl', c => {
     }
     const [code, fn] = CURL_ERR[res.error] || [7, () => res.detail || res.error];
     if (!silent || showErr) c.eprint(`curl: (${code}) ${fn(u?.host, u?.port)}`);
+    if (o['-w']) c.out(o['-w'].replace(/%\{http_code\}/g, '000').replace(/%\{time_total\}/g, '0.000000').replace(/%\{size_download\}/g, '0').replace(/\\n/g, '\n'));
     return code;
   }
   if (verbose) { c.eprint(`* Connected to ${u.host} port ${u.port}`, `> ${method} ${u.path}${u.query} HTTP/1.1`, `> Host: ${u.host}`, '> User-Agent: curl/8.5.0', '> Accept: */*', '>', `< HTTP/1.1 ${res.status} ${reason(res.status)}`, ...Object.entries(res.headers || {}).map(([k, v]) => `< ${k}: ${v}`), '<'); }

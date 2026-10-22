@@ -130,6 +130,20 @@ export function makeCheckApi(uni, sh, history) {
     lastRan: re => history.length > 0 && re.test(history[history.length - 1]),
     events: type => uni.events.filter(e => !type || e.type === type),
     remote: ownerName => uni.remotes.get(`https://github.com/${ownerName}.git`) || null,
+    // run a command in a throwaway shell (to grade what a learner's script does), without
+    // leaving events or lab messages behind
+    exec(on, cmd, { user, env = {} } = {}) {
+      const hh = host(on);
+      const s = new Session(uni, hh, { user: user || hh.defaultUser });
+      s.advancePerCommand = 0;
+      for (const [k, v] of Object.entries(env)) s.setVar(s.e, k, v, { exported: true });
+      const mark = uni.events.length, ls = [...uni.listeners], time = uni.time;
+      uni.listeners.clear();
+      let r;
+      try { r = s.run(cmd, { record: false }); }
+      finally { uni.events.length = mark; for (const l of ls) uni.listeners.add(l); uni.time = time; }
+      return { code: r.code, out: r.out.map(stripAnsi).join('\n') };
+    },
     // did an event matching b happen after the last event matching a?
     after(a, b) { const ev = uni.events; let ia = -1; ev.forEach((e, i) => { if (a(e)) ia = i; }); return ia >= 0 && ev.some((e, i) => i > ia && b(e)); },
   };

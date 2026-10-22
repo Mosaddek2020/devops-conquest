@@ -512,10 +512,12 @@ def('df', c => {
   const h = c.host;
   const G = 1073741824;
   const mounts = h.mounts || [{ fs: '/dev/sda1', type: 'ext4', size: h.diskGB * G, used: h.diskUsedGB * G, mount: '/' }, { fs: 'tmpfs', type: 'tmpfs', size: 0.5 * G, used: 0.001 * G, mount: '/run' }];
+  const paths = o._.length ? o._.map(p => c.resolve(p)) : null;
+  const shown = paths ? [...new Set(paths.map(p => [...mounts].sort((x, y) => y.mount.length - x.mount.length).find(m => p === m.mount || p.startsWith(m.mount === '/' ? '/' : m.mount + '/'))))].filter(Boolean) : mounts;
   if (o['-i']) { c.print('Filesystem      Inodes  IUsed   IFree IUse% Mounted on'); for (const m of mounts) c.print(`${m.fs.padEnd(14)} ${String(2621440).padStart(7)} ${String(m.inodesUsed ?? 184211).padStart(6)} ${String(2621440 - (m.inodesUsed ?? 184211)).padStart(7)} ${String(Math.round(((m.inodesUsed ?? 184211) / 2621440) * 100)).padStart(4)}% ${m.mount}`); return 0; }
   const fmt = n => o['-h'] ? humanSize(n) : String(Math.round(n / 1024));
   c.print(`Filesystem     ${o['-T'] ? 'Type  ' : ''}${o['-h'] ? ' Size  Used Avail' : '1K-blocks     Used Available'} Use% Mounted on`);
-  for (const m of mounts) c.print(`${m.fs.padEnd(14)} ${o['-T'] ? m.type.padEnd(6) : ''}${fmt(m.size).padStart(o['-h'] ? 5 : 9)} ${fmt(m.used).padStart(o['-h'] ? 5 : 8)} ${fmt(Math.max(0, m.size - m.used)).padStart(o['-h'] ? 5 : 9)} ${String(Math.min(100, Math.round((m.used / m.size) * 100))).padStart(3)}% ${m.mount}`);
+  for (const m of shown) c.print(`${m.fs.padEnd(14)} ${o['-T'] ? m.type.padEnd(6) : ''}${fmt(m.size).padStart(o['-h'] ? 5 : 9)} ${fmt(m.used).padStart(o['-h'] ? 5 : 8)} ${fmt(Math.max(0, m.size - m.used)).padStart(o['-h'] ? 5 : 9)} ${String(Math.min(100, Math.round((m.used / m.size) * 100))).padStart(3)}% ${m.mount}`);
   return 0;
 });
 
