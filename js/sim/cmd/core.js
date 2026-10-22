@@ -42,13 +42,13 @@ def(['ls', 'dir'], c => {
     let list = f.list(p).map(([n]) => n);
     if (!showAll) list = list.filter(n => !n.startsWith('.'));
     else list = ['.', '..', ...list];
-    let items = list.map(n => { const ap = n === '.' ? a : n === '..' ? dirname(a) : (a === '/' ? '/' + n : a + '/' + n); return { n, ap, st: c.host.stat(ap) }; }).filter(x => x.st);
+    let items = list.map(n => { const ap = n === '.' ? a : n === '..' ? dirname(a) : (a === '/' ? '/' + n : a + '/' + n); return { n, ap, st: o['-l'] ? (c.host.lstat(ap) || c.host.stat(ap)) : (c.host.stat(ap) || c.host.lstat(ap)) }; }).filter(x => x.st);
     if (o['-t']) items.sort((x, y) => y.st.mtime - x.st.mtime);
     if (o['-S']) items.sort((x, y) => fileSize(c.host, y.ap, y.st) - fileSize(c.host, x.ap, x.st));
     if (o['-r']) items.reverse();
     return items;
   };
-  const color = (n, st) => st.type === 'dir' ? C.blue(C.bold(n)) + (o['-F'] ? '/' : '') : (st.mode & 0o111) ? C.green(C.bold(n)) + (o['-F'] ? '*' : '') : n;
+  const color = (n, st) => st.type === 'link' ? C.cyan(C.bold(n)) + (o['-l'] ? ` -> ${st.target}` : '') : st.type === 'dir' ? C.blue(C.bold(n)) + (o['-F'] ? '/' : '') : (st.mode & 0o111) ? C.green(C.bold(n)) + (o['-F'] ? '*' : '') : n;
   const long = (items, withTotal = true) => {
     const total = items.reduce((s, x) => s + Math.ceil(fileSize(c.host, x.ap, x.st) / 4096) * 4, 0);
     if (withTotal) c.print(`total ${total}`);
@@ -277,27 +277,41 @@ def('mv', c => {
 });
 
 def('ln', c => {
-  const o = opts(c.args, { bool: 'sfnv', val: [] });
+  const o = opts(c.args, { bool: 'sfnvT', val: [] });
   const f = fsx(c);
   const [target, link] = o._;
   if (!target) return c.fail('ln: missing file operand');
-  const la = link ? f.abs(link) : f.abs(basename(target));
-  const ta = target.startsWith('/') ? target : normPath(dirname(la) + '/' + target);
-  if (c.host.stat(la) && !o['-f']) return c.fail(`ln: failed to create ${o['-s'] ? 'symbolic ' : ''}link '${link}': File exists`);
-  // the simulator copies instead of linking, and remembers the target for ls/readlink
-  if (c.host.stat(ta)?.type === 'file') c.host.writeFile(la, c.host.files.get(ta), c.user);
-  else if (c.host.stat(ta)?.type === 'dir') c.host.mkdirMeta(la, c.user);
-  else c.host.writeFile(la, '', c.user);
-  c.host.links = c.host.links || new Map();
-  c.host.links.set(la, ta);
-  c.uni.emit({ type: 'symlink', host: c.host.name, link: la, target: ta });
+  if (!o['-s']) return c.fail(C.dim('(hard links are not simulated: use ln -s for a symbolic link)'), 1);
+  let la = link ? f.abs(link) : f.abs(basename(target));
+  // ln -s target dir/  creates dir/basename(target), unless -n/-T and the link already exists
+  if (c.host.isDir(la) && !c.host.isLink(la) && !(o['-T'])) la = normPath(la + '/' + basename(target));
+  else if (c.host.isLink(la) && c.host.isDir(la) && !o['-n'] && !o['-T']) la = normPath(c.host.realPath(la) + '/' + basename(target));
+  if (c.host.lstat(la)) {
+    if (!o['-f']) return c.fail(`ln: failed to create symbolic link '${link || basename(target)}': File exists`);
+    if (c.host.lstat(la).type === 'dir') return c.fail(`ln: cannot overwrite directory '${link}'`);
+    c.host.removeFile(la);
+  }
+  const parent = dirname(la);
+  if (!c.host.isDir(parent)) return c.fail(`ln: failed to create symbolic link '${link}': No such file or directory`);
+  if (!access(c.host, c.user, parent, 'w')) return c.fail(`ln: failed to create symbolic link '${link}': Permission denied`);
+  c.host.links.set(la, target);
+  c.host.meta.set(la, c.host.newMeta(c.user, 0o777));
+  if (o['-v']) c.print(`'${link}' -> '${target}'`);
+  c.uni.emit({ type: 'symlink', host: c.host.name, link: la, target });
   return 0;
 });
 
 def(['readlink', 'realpath'], c => {
   const f = fsx(c);
-  for (const p of c.args.filter(a => !a.startsWith('-'))) { const a = f.abs(p); c.print(c.host.links?.get(a) || a); }
-  return 0;
+  const canon = c.name === 'realpath' || c.args.includes('-f') || c.args.includes('-e');
+  let code = 0;
+  for (const p of c.args.filter(a => !a.startsWith('-'))) {
+    const a = f.abs(p);
+    if (canon) c.print(c.host.realPath(a));
+    else if (c.host.isLink(a)) c.print(c.host.links.get(a));
+    else code = 1;
+  }
+  return code;
 });
 
 def('chmod', c => {

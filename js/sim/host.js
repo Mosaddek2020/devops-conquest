@@ -8,6 +8,14 @@
 
 import { World, normPath, dirname, basename } from '../git/world.js';
 
+// A file map that follows symlinks: get/has/set resolve the path through host.links.
+class LinkMap extends Map {
+  constructor(host) { super(); this.host = host; }
+  get(p) { return super.get(this.host.links?.size ? this.host.realPath(p) : p); }
+  has(p) { return super.has(this.host.links?.size ? this.host.realPath(p) : p); }
+  set(p, v) { return super.set(this.host?.links?.size ? this.host.realPath(p) : p, v); }
+}
+
 export class SimError extends Error {
   constructor(message, code = 1) { super(message); this.code = code; }
 }
@@ -94,6 +102,10 @@ export class Host extends World {
     this.globalConfig = { ...uni.globalConfig };
     // filesystem metadata: path -> { mode, owner, group, mtime }
     this.meta = new Map();
+    this.links = new Map();      // symlink path -> target (absolute or relative)
+    const plain = this.files;
+    this.files = new LinkMap(this);
+    for (const [k, v] of plain) this.files.set(k, v);
     this.users = new Map();
     this.groups = new Map();
     const user = opts.user || 'dev';
@@ -206,8 +218,43 @@ export class Host extends World {
     for (const m of missing.reverse()) { this.dirs.add(m); if (!this.meta.has(m)) this.meta.set(m, this.newMeta(owner, 0o755)); }
   }
 
+  // resolve symlinks in every component of an absolute path
+  realPath(p, depth = 0) {
+    if (!this.links.size || depth > 8) return p;
+    const parts = p.split('/').filter(Boolean);
+    let cur = '';
+    for (let i = 0; i < parts.length; i++) {
+      cur += '/' + parts[i];
+      const t = this.links.get(cur);
+      if (t !== undefined) {
+        const target = t.startsWith('/') ? t : normPath(dirname(cur) + '/' + t);
+        return this.realPath(normPath(target + '/' + parts.slice(i + 1).join('/')), depth + 1);
+      }
+    }
+    return p;
+  }
+
+  isLink(p) { return this.links.has(p); }
+
+  isDir(p) {
+    if (this.links.size) p = this.realPath(p);
+    if (this.dirs.has(p)) return true;
+    const pre = p === '/' ? '/' : p + '/';
+    for (const f of Map.prototype.keys.call(this.files)) if (f.startsWith(pre)) return true;
+    return false;
+  }
+
+  listDir(p) {
+    const real = this.links.size ? this.realPath(p) : p;
+    const out = new Map(super.listDir(real));
+    const pre = p === '/' ? '/' : p + '/';
+    for (const [l, t] of this.links) if (l.startsWith(pre) && !l.slice(pre.length).includes('/')) { const tt = t.startsWith('/') ? t : normPath(dirname(l) + '/' + t); out.set(l.slice(pre.length), this.isDir(tt) ? 'dir' : 'file'); }
+    return [...out.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }
+
   // World API used by git: keep metadata in step
   writeFile(p, content, owner) {
+    if (this.links.size) p = this.realPath(p);
     const existed = this.files.has(p);
     this.ensureParents(p, owner || this.defaultUser);
     this.files.set(p, content);
@@ -220,16 +267,24 @@ export class Host extends World {
     return this.defaultUser && p.startsWith('/home/') ? this.defaultUser : 'root';
   }
 
-  removeFile(p) { this.files.delete(p); this.meta.delete(p); }
+  removeFile(p) { if (this.links.has(p)) { this.links.delete(p); this.meta.delete(p); return; } const r = this.links.size ? this.realPath(p) : p; this.files.delete(r); this.meta.delete(r); }
+
+  lstat(p) {
+    p = normPath(p);
+    if (this.links.has(p)) return { type: 'link', size: this.links.get(p).length, mode: 0o777, owner: this.meta.get(p)?.owner || 'root', group: this.meta.get(p)?.group || 'root', mtime: this.meta.get(p)?.mtime || this.time, target: this.links.get(p) };
+    return this.stat(p);
+  }
 
   stat(p) {
     p = normPath(p);
+    if (this.links.size) { const r = this.realPath(p); if (r !== p) { if (!this.files.has(r) && !this.isDir(r)) return null; p = r; } }
     if (this.files.has(p)) return { type: 'file', size: new TextEncoder().encode(this.files.get(p)).length, ...(this.meta.get(p) || this.newMeta('root', 0o644)) };
     if (this.isDir(p)) return { type: 'dir', size: 4096, ...(this.meta.get(p) || this.newMeta('root', 0o755)) };
     return null;
   }
 
   setMeta(p, patch) {
+    if (this.links.size) p = this.realPath(p);
     const s = this.stat(p);
     if (!s) return false;
     const cur = this.meta.get(p) || { mode: s.mode, owner: s.owner, group: s.group, mtime: s.mtime };

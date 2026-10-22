@@ -60,6 +60,7 @@ export class Session {
     this.jobs = [];
     this.extraCommands = {};  // labs can add commands
     this.lineHooks = [];      // fn(line, result) after each top-level command
+    this.pendingAsync = [];   // output from background jobs, shown after the next command
     this.advancePerCommand = 2;
   }
 
@@ -126,6 +127,11 @@ export class Session {
   // ---------- entry points ----------
   run(line, { record = true } = {}) {
     const result = { out: [], code: 0, editor: null, clear: false, ask: null };
+    if (/(^|[^\\])!!|!\$/.test(line) && this.history.length) {
+      const prev = this.history[this.history.length - 1];
+      line = line.replace(/!!/g, prev).replace(/!\$/g, prev.trim().split(/\s+/).pop());
+      result.expanded = line;
+    }
     if (record && line.trim()) this.history.push(line);
     if (!line.trim()) return result;
     const chunks = [];
@@ -140,6 +146,8 @@ export class Session {
     this.lastCode = code;
     this.e.lastStatus = code;
     result.code = code;
+    if (result.expanded) chunks.unshift(result.expanded + '\n');
+    if (this.pendingAsync.length) chunks.push(this.pendingAsync.splice(0).join('\n') + '\n');
     result.out = toLines(chunks);
     if (this.advancePerCommand) this.uni.advance(this.advancePerCommand);
     for (const h of this.lineHooks) { try { h(line, result); } catch (err) { console.error(err); } }
@@ -416,6 +424,8 @@ export class Session {
   invoke(argv, e, io, result, flags = {}) {
     const [name, ...args] = argv;
     if (typeof name !== 'string') return 0;
+    // aliases (simple: only the command word)
+    if (e.aliases?.[name] && !flags.noAlias) return this.runIn(e.aliases[name] + ' ' + args.map(a => /[\s'"$]/.test(a) ? `'${a.replace(/'/g, "'\\''")}'` : a).join(' '), e, io, result);
     // shell functions
     if (e.functions.has(name)) return this.callFunction(name, args, e, io, result);
     // shell builtins (need the env)
@@ -543,7 +553,9 @@ export class Session {
       if (!append || !st) host.writeFile(abs, append && st ? host.files.get(abs) : '', e.user);
       const buf = [];
       flushes.push(() => { const cur = host.files.get(abs) ?? ''; host.writeFile(abs, cur + stripAnsi(buf.join('')), e.user); host.uni.emit({ type: 'file-write', host: host.name, path: abs }); });
-      return s => buf.push(s);
+      const w = s => buf.push(s);
+      w.path = abs;
+      return w;
     };
     for (const r of redirs) {
       const fd = r.fd;

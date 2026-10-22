@@ -52,6 +52,12 @@ export function fsx(c) {
     },
     remove(p, { recursive = false, force = false } = {}) {
       const a = abs(p);
+      if (host.isLink(a)) {
+        if (!access(host, user, dirname(a), 'w')) throw new SimError(`${name}: cannot remove '${p}': Permission denied`, 1);
+        host.removeFile(a);
+        host.uni.emit({ type: 'file-remove', host: host.name, path: a });
+        return;
+      }
       const st = host.stat(a);
       if (!st) { if (force) return; throw new SimError(`${name}: cannot remove '${p}': No such file or directory`, 1); }
       if (a === '/' ) throw new SimError(`${name}: it is dangerous to operate recursively on '/'\n${name}: use --no-preserve-root to override this failsafe`, 1);
@@ -93,7 +99,7 @@ export function fsx(c) {
 }
 
 export function modeString(st) {
-  const t = st.type === 'dir' ? 'd' : '-';
+  const t = st.type === 'dir' ? 'd' : st.type === 'link' ? 'l' : '-';
   const m = st.mode;
   const rwx = (b, s, ch) => ((m >> b) & 4 ? 'r' : '-') + ((m >> b) & 2 ? 'w' : '-') + (((m >> b) & 1) ? (s ? ch : 'x') : (s ? ch.toUpperCase() : '-'));
   return t + rwx(6, m & 0o4000, 's') + rwx(3, m & 0o2000, 's') + rwx(0, m & 0o1000, 't');
