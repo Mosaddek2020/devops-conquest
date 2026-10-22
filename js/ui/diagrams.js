@@ -447,6 +447,61 @@ D['k8s-probes'] = () => {
   return figure(d, 'Probes and resources are how you tell Kubernetes what "healthy" and "enough" mean for your app. Without them it can only guess.');
 };
 
+
+// ---------- Realm 8: Infrastructure as Code ----------
+D['tf-triangle'] = () => {
+  const d = mk(720, 260, 'Terraform compares three things: your configuration, its state file, and the real infrastructure');
+  d.box(250, 16, 220, 60, 'configuration (*.tf)', { sub: 'what you want', color: 'main', titleSize: 13 });
+  d.box(40, 170, 220, 60, 'state (terraform.tfstate)', { sub: 'what Terraform last did', color: 'info', titleSize: 12.5 });
+  d.box(460, 170, 220, 60, 'real infrastructure', { sub: 'what actually exists', color: 'ok', titleSize: 13 });
+  d.arrow(300, 80, 170, 166, { color: 'main', label: 'plan: diff', dy: -4, lx: 200, ly: 120, size: 11.5 });
+  d.arrow(264, 200, 456, 200, { color: 'info', label: 'refresh: read real values', dy: -10, size: 11.5 });
+  d.arrow(420, 80, 560, 166, { color: 'ok', label: 'apply: change', dy: -4, lx: 540, ly: 120, size: 11.5 });
+  d.text(360, 252, 'Drift = reality changed outside Terraform (a console click). Refresh shows it; the next apply undoes it unless you put it in the code.', { size: 11.5, color: 'muted' });
+  return figure(d, 'Plan is safe: it only reads. Apply changes the real world and then records the result in state. Never edit state by hand.');
+};
+
+D['tf-graph'] = () => {
+  const d = mk(720, 230, 'Terraform builds a dependency graph from references: resources that refer to others are created after them, in parallel where possible');
+  d.box(20, 30, 170, 50, 'aws_key_pair.dev', { color: 'info', titleSize: 12 });
+  d.box(20, 140, 170, 50, 'aws_security_group.web', { color: 'info', titleSize: 11.5 });
+  d.box(275, 85, 170, 50, 'aws_instance.web', { color: 'main', titleSize: 12 });
+  d.box(530, 30, 170, 50, 'aws_route53_record.www', { color: 'feat', titleSize: 11 });
+  d.box(530, 140, 170, 50, 'output.public_ip', { color: 'muted', titleSize: 12 });
+  d.arrow(192, 60, 271, 102, { color: 'text', label: 'key_name', dy: -6, size: 10.5 });
+  d.arrow(192, 162, 271, 120, { color: 'text', label: 'vpc_security_group_ids', dy: 16, size: 10.5 });
+  d.arrow(447, 102, 526, 62, { color: 'text', label: 'public_ip', dy: -6, size: 10.5 });
+  d.arrow(447, 120, 526, 160, { color: 'text' });
+  d.text(360, 222, 'Destroy walks the same graph backwards: the record and instance go before the security group.', { size: 12, color: 'muted' });
+  return figure(d, 'You rarely need depends_on: a reference like aws_security_group.web.id is both the value and the ordering.');
+};
+
+D['provision-configure'] = () => {
+  const d = mk(720, 230, 'Provisioning creates the machines and network; configuration management sets up what runs on them');
+  d.box(20, 40, 320, 150, '', { color: 'main', dash: '6 4' });
+  d.text(36, 62, 'Terraform: provision', { anchor: 'start', weight: 700, size: 13.5, color: 'main' });
+  ['VPC, subnets, gateways', 'security groups', 'instances, key pairs', 'DNS records, buckets'].forEach((t, k) => d.text(40, 92 + k * 22, '• ' + t, { anchor: 'start', size: 12.5 }));
+  d.box(380, 40, 320, 150, '', { color: 'feat', dash: '6 4' });
+  d.text(396, 62, 'Ansible: configure', { anchor: 'start', weight: 700, size: 13.5, color: 'feat' });
+  ['packages (nginx, node)', 'files and templates', 'users, services, firewall', 'app releases'].forEach((t, k) => d.text(400, 92 + k * 22, '• ' + t, { anchor: 'start', size: 12.5 }));
+  d.arrow(342, 115, 376, 115, { color: 'text', label: 'IPs → inventory', dy: -10, size: 11 });
+  d.text(360, 220, 'Both are declarative and idempotent: describe the end state, run it again safely. With containers, the image replaces most of the right-hand box.', { size: 11.5, color: 'muted' });
+  return figure(d, 'Terraform talks to cloud APIs. Ansible talks to machines over SSH. Together they rebuild an environment from git.');
+};
+
+D['ansible-flow'] = () => {
+  const d = mk(720, 230, 'Ansible pushes from a control node over SSH; each task checks the current state and only changes what differs');
+  d.box(20, 80, 170, 70, 'control node', { sub: 'playbook + inventory', color: 'accent', titleSize: 13 });
+  [0, 1, 2].forEach(k => d.box(330, 20 + k * 68, 150, 52, `web${k + 1}`, { sub: 'ssh · python3', color: 'info', titleSize: 13 }));
+  d.arrow(192, 115, 326, 46, { color: 'text' });
+  d.arrow(192, 115, 326, 114, { color: 'text', label: 'SSH', dy: -6 });
+  d.arrow(192, 115, 326, 182, { color: 'text' });
+  d.box(530, 30, 170, 170, '', { color: 'ok', dash: '5 4' });
+  d.text(615, 52, 'each task', { weight: 700, size: 12.5 });
+  ['1. check state', '2. change if needed', '3. report ok/changed', '4. notify handlers'].forEach((t, k) => d.text(545, 80 + k * 26, t, { anchor: 'start', size: 12 }));
+  return figure(d, 'No agent to install: SSH plus Python on the target. Run the same playbook twice and the second run should report changed=0.');
+};
+
 export function renderDiagram(name) {
   const fn = D[name];
   if (!fn) return h('div', { class: 'figure' }, `Missing diagram: ${name}`);

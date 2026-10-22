@@ -984,6 +984,7 @@ const SHELL_BUILTINS = {
     return 0;
   },
   printf(args, e, io) {
+    if (args[0] === '--') args = args.slice(1);
     if (!args.length) { io.err('printf: usage: printf format [arguments]\n'); return 2; }
     let [fmt, ...rest] = args;
     if (fmt === '-v') { const name = rest[0]; const out = formatPrintf(rest[1], rest.slice(2)); this.setVar(e, name, out); return 0; }

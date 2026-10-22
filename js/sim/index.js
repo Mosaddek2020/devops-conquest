@@ -12,6 +12,10 @@ import './docker.js';
 import './docker-lab.js';
 import './kubectl.js';
 import './k8s-lab.js';
+import './cloud.js';
+import './terraform.js';
+import './ansible.js';
+import './iac-lab.js';
 import { wirePackages } from './packages.js';
 import { installSystemdTicker } from './systemd.js';
 

@@ -9,6 +9,7 @@ import { GitHubView } from './ui/panels.js';
 import { SystemView, FileTreeView, NetworkView } from './ui/devpanels.js';
 import './ui/dockerpanel.js';
 import './ui/k8spanel.js';
+import './ui/cloudpanel.js';
 import { extraPanels } from './ui/panelRegistry.js';
 import './sim/index.js';
 import { Session } from './sim/session.js';

@@ -81,7 +81,7 @@ export const CATALOG = {
   'netcat-openbsd': { version: '1.226-1ubuntu2', size: '44.4 kB', bins: ['nc', 'netcat'] },
   'redis-tools': { version: '5:7.0.15-1build2', size: '1,034 kB', bins: ['redis-cli'] },
   'postgresql-client': { version: '16+257build1', size: '10.9 kB', bins: ['psql', 'pg_dump'] },
-  ansible: { version: '9.2.0+dfsg-0ubuntu5', size: '17.1 MB', bins: ['ansible', 'ansible-playbook', 'ansible-inventory', 'ansible-galaxy'] },
+  ansible: { version: '9.2.0+dfsg-0ubuntu5', size: '17.1 MB', bins: ['ansible', 'ansible-playbook', 'ansible-inventory', 'ansible-galaxy', 'ansible-vault', 'ansible-lint'] },
   terraform: { version: '1.9.8-1', size: '27.4 MB', bins: ['terraform'] },
   kubectl: { version: '1.31.2-1.1', size: '11.2 MB', bins: ['kubectl'] },
   helm: { version: '3.16.2-1', size: '16.4 MB', bins: ['helm'] },

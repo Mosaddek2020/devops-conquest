@@ -64,4 +64,14 @@ export const SCENARIOS = {
     },
     panels: ['cluster', 'files'],
   },
+  cloud: {
+    title: 'Cloud + Terraform + Ansible',
+    note: 'An AWS-like account with credentials, an SSH key, terraform and ansible installed, and a starter config in ~/infra. Try: cd infra && terraform init && terraform plan, then apply and curl the output IP.',
+    setup(H) {
+      H.cloud({ tools: ['awscli', 'terraform', 'ansible'] });
+      H.run('ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q', { on: 'laptop' });
+      H.write('laptop', '~/infra/main.tf', 'terraform {\n  required_providers {\n    aws = {\n      source  = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n\nprovider "aws" {\n  region = "eu-west-1"\n}\n\nresource "aws_key_pair" "me" {\n  key_name   = "me"\n  public_key = file("~/.ssh/id_ed25519.pub")\n}\n\nresource "aws_security_group" "web" {\n  name = "web"\n  ingress {\n    from_port   = 80\n    to_port     = 80\n    protocol    = "tcp"\n    cidr_blocks = ["0.0.0.0/0"]\n  }\n  ingress {\n    from_port   = 22\n    to_port     = 22\n    protocol    = "tcp"\n    cidr_blocks = ["198.51.100.23/32"]\n  }\n}\n\nresource "aws_instance" "web" {\n  ami                    = "ami-0a7f1556c36aea1b6"\n  instance_type          = "t3.micro"\n  key_name               = aws_key_pair.me.key_name\n  vpc_security_group_ids = [aws_security_group.web.id]\n  user_data              = <<-EOF\n    #!/bin/bash\n    apt-get install -y nginx\n  EOF\n  tags = {\n    Name = "sandbox-web"\n  }\n}\n\noutput "public_ip" {\n  value = aws_instance.web.public_ip\n}\n', { owner: 'dev' });
+    },
+    panels: ['cloud', 'files'],
+  },
 };

@@ -676,3 +676,4 @@ button { font: inherit; color: inherit; }
 .k8s .sys-track { margin-top: 6px; }
 div.k8s-warn { border: none; }
 .k8s-warn-msg { margin-top: 2px; overflow-wrap: anywhere; }
+.pill-bad { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); font-weight: 600; }

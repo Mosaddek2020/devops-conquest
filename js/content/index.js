@@ -7,5 +7,6 @@ import scripting from './r04-scripting.js';
 import cicd from './r05-cicd.js';
 import containers from './r06-containers.js';
 import kubernetes from './r07-kubernetes.js';
+import iac from './r08-iac.js';
 
-export const realms = [basecamp, linux, network, services, scripting, cicd, containers, kubernetes];
+export const realms = [basecamp, linux, network, services, scripting, cicd, containers, kubernetes, iac];

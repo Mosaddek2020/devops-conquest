@@ -20,6 +20,7 @@ You unlock the next lesson by passing it.
 | 5 | CI/CD: GitHub Actions on simulated runners that build, deploy over SSH and smoke-test | 6 |
 | 6 | Containers: Docker images, Dockerfiles, small safe images, volumes, networks, Compose, registries | 8 |
 | 7 | Kubernetes: desired state, debugging pods, Services and Ingress, config and Secrets, probes and resources, rollouts, HPA and StatefulSets | 8 |
+| 8 | Infrastructure as Code: Terraform (plans, state, drift, modules, safe changes) and Ansible (playbooks, templates, handlers, vault) | 8 |
 
 ## How it works
 
@@ -28,11 +29,13 @@ You unlock the next lesson by passing it.
   Actions, Docker (`docker.js`, `docker-images.js`: builds run each `RUN` step in a build
   container, layers are cached, containers are small hosts with their own IPs), Kubernetes
   (`k8s.js` controllers, scheduler, kubelet with probes and back-off, Services, Ingress, HPA,
-  StatefulSets; `kubectl.js` the CLI) and a
+  StatefulSets; `kubectl.js` the CLI), an AWS-like cloud (`cloud.js`: instances run cloud-init,
+  security groups and VPC routes really filter traffic), Terraform (`hcl.js` parser/evaluator,
+  `terraform.js` plan/apply/state/backends, `tfproviders.js`), Ansible (`ansible.js`) and a
   simulated AI assistant (`ai`) whose scripted answers are sometimes wrong on purpose.
 - `js/content/rNN-*.js` defines each realm's labs (setup, tasks with checks and reference
   solutions) and quizzes; `content/<realm>/<lesson>.md` holds the lesson text.
-- `js/ui/` has the terminal, panels (System, Files, Network, GitHub, Docker, Cluster), diagrams and
+- `js/ui/` has the terminal, panels (System, Files, Network, GitHub, Docker, Cluster, Cloud), diagrams and
   step-through replays; `js/views/` the pages, including the three.js map.
 
 ## Develop

@@ -19,6 +19,7 @@ export function newUniverse(opts = {}) {
   installDockerTicker(uni);
   installK8sTicker(uni);
   uni.dockerInstall = h => engineOf(h, uni);
+  uni.makeServer = (name, opts) => addServer(uni, name, opts);
   uni.cronRunner = (host, user, cmd) => {
     const s = new Session(uni, host, { user });
     s.advancePerCommand = 0;
