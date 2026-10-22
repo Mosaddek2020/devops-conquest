@@ -398,9 +398,28 @@ def(['npm', 'npx', 'yarn', 'pnpm'], c => {
   if (sub === 'test' || sub === 't' || sub === 'run' || sub === 'audit') {
     const pkg = readPkg();
     const script = sub === 'run' ? rest[0] : sub === 'audit' ? 'audit' : 'test';
-    if (sub === 'audit') { if (host.labNpmVulns) { c.print(`# npm audit report\n\n${host.labNpmAudit || 'lodash  <4.17.21\nSeverity: high\nPrototype Pollution in lodash - https://github.com/advisories/GHSA-p6mc-m468-83gw\nfix available via `npm audit fix`'}\n\n${host.labNpmVulns} high severity vulnerabilities`); return 1; } c.print('found 0 vulnerabilities'); return 0; }
+    if (sub === 'audit') {
+      const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+      const found = auditDeps(deps);
+      if (found.length) {
+        c.print('# npm audit report', '');
+        for (const v of found) c.print(`${v.name}  ${v.range}`, `Severity: ${v.severity}`, `${v.title} - ${v.url}`, `fix available via \`npm audit fix\` (upgrade to ${v.fixed} or later)`, '');
+        const high = found.filter(v => /high|critical/.test(v.severity)).length;
+        c.print(`${found.length} vulnerabilit${found.length === 1 ? 'y' : 'ies'} (${high} high)`);
+        const level = (rest.find(a => a.startsWith('--audit-level=')) || '--audit-level=low').split('=')[1];
+        const order = ['low', 'moderate', 'high', 'critical'];
+        return found.some(v => order.indexOf(v.severity) >= order.indexOf(level)) ? 1 : 0;
+      }
+      c.print('found 0 vulnerabilities');
+      return 0;
+    }
+    if (sub === 'audit_legacy') { if (host.labNpmVulns) { c.print(`# npm audit report\n\n${host.labNpmAudit || 'lodash  <4.17.21\nSeverity: high\nPrototype Pollution in lodash - https://github.com/advisories/GHSA-p6mc-m468-83gw\nfix available via `npm audit fix`'}\n\n${host.labNpmVulns} high severity vulnerabilities`); return 1; } c.print('found 0 vulnerabilities'); return 0; }
     if (!pkg.scripts?.[script]) { if (sub === 'run' && !rest[0]) { c.print(`Lifecycle scripts included in ${pkg.name}:`, ...Object.entries(pkg.scripts || {}).map(([k, v]) => `  ${k}\n    ${v}`)); return 0; } return c.fail(`npm error Missing script: "${script}"\nnpm error\nnpm error To see a list of scripts, run:\nnpm error   npm run`, 1); }
     c.print('', `> ${pkg.name}@${pkg.version || '1.0.0'} ${script}`, `> ${pkg.scripts[script]}`, '');
+    if (!/\b(jest|mocha|vitest|eslint|tsc|pytest|ava|tap|standard|prettier)\b/.test(pkg.scripts[script])) {
+      // a plain shell script: run it for real, with node_modules/.bin on PATH like npm does
+      return c.runLine(pkg.scripts[script]);
+    }
     const files = new Map();
     const root = c.cwd;
     for (const [p, txt] of host.files) if (p.startsWith(root + '/') && !p.includes('/node_modules/')) files.set(p.slice(root.length + 1), host.uni.writeBlob(txt));
@@ -444,6 +463,24 @@ def('nginx', c => {
   return c.fail(C.dim('(start nginx through systemd: sudo systemctl start nginx)'), 1);
 });
 
+// a tiny advisory database for npm audit (real advisories)
+const ADVISORIES = [
+  { name: 'lodash', below: '4.17.21', severity: 'high', title: 'Command Injection in lodash', url: 'https://github.com/advisories/GHSA-35jh-r3h4-6jhm' },
+  { name: 'minimist', below: '1.2.6', severity: 'critical', title: 'Prototype Pollution in minimist', url: 'https://github.com/advisories/GHSA-xvch-5gv4-984h' },
+  { name: 'express', below: '4.19.2', severity: 'moderate', title: 'Express.js Open Redirect in malformed URLs', url: 'https://github.com/advisories/GHSA-rv95-896h-c2vc' },
+  { name: 'axios', below: '1.6.0', severity: 'moderate', title: 'Axios Cross-Site Request Forgery Vulnerability', url: 'https://github.com/advisories/GHSA-wf5p-g6vw-rhxx' },
+  { name: 'jsonwebtoken', below: '9.0.0', severity: 'high', title: 'jsonwebtoken unrestricted key type could lead to legacy keys usage', url: 'https://github.com/advisories/GHSA-8cf7-32gw-wr33' },
+];
+const cmpVer = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); } return 0; };
+export function auditDeps(deps) {
+  const out = [];
+  for (const [name, spec] of Object.entries(deps || {})) {
+    const v = String(spec).replace(/^[\^~>=<\s]+/, '');
+    for (const a of ADVISORIES) if (a.name === name && /^\d+\.\d+/.test(v) && cmpVer(v, a.below) < 0) out.push({ ...a, range: `<${a.below}`, fixed: a.below });
+  }
+  return out;
+}
+
 // ---------- the cloud provider's web console (lab feature) ----------
 def('console', c => {
   const name = c.args[0];
@@ -462,6 +499,15 @@ function keyFiles(host, user) {
   return ['id_ed25519', 'id_rsa', 'id_ecdsa'].map(k => `${home}/.ssh/${k}`).filter(p => host.files.has(p));
 }
 
+// simulated private keys carry their public half (as real OpenSSH keys do), base64 encoded
+export function privateKeyFor(pub) {
+  return `-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ\n${btoa('pub:' + pub.trim())}\n-----END OPENSSH PRIVATE KEY-----\n`;
+}
+function pubFromPrivate(text) {
+  for (const line of String(text || '').split('\n')) { try { const d = atob(line.trim()); if (d.startsWith('pub:')) return d.slice(4); } catch { /* not base64 */ } }
+  return null;
+}
+
 function sshAuth(c, target, tuser, identity) {
   const src = c.host;
   const keys = identity ? [c.resolve(identity)] : keyFiles(src, c.user);
@@ -472,7 +518,7 @@ function sshAuth(c, target, tuser, identity) {
       c.eprint('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@', '@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @', '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@', `Permissions 0${(st.mode & 0o777).toString(8)} for '${k}' are too open.`, 'It is required that your private key files are NOT accessible by others.', 'This private key will be ignored.', `Load key "${k}": bad permissions`);
       continue;
     }
-    const pub = src.files.get(k + '.pub');
+    const pub = src.files.get(k + '.pub') || pubFromPrivate(src.files.get(k));
     const tu = target.users.get(tuser);
     if (!tu) continue;
     const ak = `${tu.home}/.ssh/authorized_keys`;
@@ -556,7 +602,7 @@ def('ssh-keygen', c => {
   const id = Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
   const comment = o['-C'] || `${c.user}@${c.host.name}`;
   const pub = `ssh-${type === 'rsa' ? 'rsa' : type} AAAAC3NzaC1lZDI1NTE5AAAAI${btoa(id).replace(/=/g, '')}${'x'.repeat(4)} ${comment}\n`;
-  c.host.writeFile(file, `-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n${btoa(id + id).replace(/=/g, '')}\n-----END OPENSSH PRIVATE KEY-----\n`, c.user);
+  c.host.writeFile(file, privateKeyFor(pub), c.user);
   c.host.setMeta(file, { mode: 0o600 });
   c.host.writeFile(file + '.pub', pub, c.user);
   c.host.setMeta(file + '.pub', { mode: 0o644 });

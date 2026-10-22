@@ -373,6 +373,9 @@ export function executeRun(world, bare, run) {
 }
 
 function runJob(world, bare, run, job, flat, base) {
+  // DevOps Conquest: jobs run on simulated runner machines when the universe provides one
+  const U = world.uni || world;
+  if (U.realRunner) { U.realRunner({ world, bare, run, job, flat, base, interpolate, evalExpr, truthy }); return; }
   const def = job.def;
   job.log = [`Runner: ${def.runsOn}`];
   if (job.approval) job.log.push(`Deployment to ${job.envName} approved by ${job.approval.by}`);

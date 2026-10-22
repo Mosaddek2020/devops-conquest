@@ -199,7 +199,7 @@ export class Host extends World {
     for (const seg of parts) {
       cur += '/' + seg;
       if (!this.dirs.has(cur)) { this.dirs.add(cur); }
-      if (!this.meta.has(cur)) this.meta.set(cur, this.newMeta(cur === p ? owner : 'root', cur === p ? mode : 0o755));
+      if (!this.meta.has(cur)) this.meta.set(cur, this.newMeta(cur === p ? owner : (this.users ? this.ownerFor(cur) : 'root'), cur === p ? mode : 0o755));
     }
     if (!this.meta.has('/')) this.meta.set('/', this.newMeta('root', 0o755));
   }
@@ -288,8 +288,9 @@ export class Host extends World {
   stat(p) {
     p = normPath(p);
     if (this.links.size) { const r = this.realPath(p); if (r !== p) { if (!this.files.has(r) && !this.isDir(r)) return null; p = r; } }
-    if (this.files.has(p)) return { type: 'file', size: new TextEncoder().encode(this.files.get(p)).length, ...(this.meta.get(p) || this.newMeta('root', 0o644)) };
-    if (this.isDir(p)) return { type: 'dir', size: 4096, ...(this.meta.get(p) || this.newMeta('root', 0o755)) };
+    // paths created without metadata (e.g. by git) belong to whoever owns that part of the tree
+    if (this.files.has(p)) return { type: 'file', size: new TextEncoder().encode(this.files.get(p)).length, ...(this.meta.get(p) || this.newMeta(this.ownerFor(p), 0o644)) };
+    if (this.isDir(p)) return { type: 'dir', size: 4096, ...(this.meta.get(p) || this.newMeta(this.ownerFor(p), 0o755)) };
     return null;
   }
 

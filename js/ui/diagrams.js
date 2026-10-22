@@ -256,6 +256,33 @@ D['script-anatomy'] = () => {
   return figure(d, 'A script is a program. Treat it like one: fail loudly, check inputs, log what you do, and make it safe to run twice.');
 };
 
+// ---------- Realm 5: CI/CD ----------
+D['pipeline'] = () => {
+  const d = mk(720, 250, 'A CI/CD pipeline: every push is tested and built once; the same artifact goes to staging, then to production after approval');
+  const stages = [['push / PR', 'git', 'accent'], ['lint + test', 'CI', 'info'], ['build', 'artifact v1.4.2', 'main'], ['staging', 'auto deploy\n+ smoke test', 'feat'], ['production', 'tag + approval', 'ok']];
+  stages.forEach(([t, sub, c], k) => { d.box(10 + k * 142, 70, 124, 70, t, { sub, color: c, titleSize: 13.5 }); if (k) d.arrow(10 + k * 142 - 16, 105, 10 + k * 142 - 2, 105, { color: 'text' }); });
+  d.text(360, 34, 'CI: integrate and verify every change', { weight: 700, font: 'display', size: 14, color: 'info' });
+  d.line(146, 46, 430, 46, { color: 'info', width: 2 });
+  d.text(570, 34, 'CD: deliver the same artifact', { weight: 700, font: 'display', size: 14, color: 'ok' });
+  d.line(436, 46, 704, 46, { color: 'ok', width: 2 });
+  d.text(360, 180, 'Fail fast: a red stage stops everything after it.', { size: 12.5, color: 'muted' });
+  d.text(360, 202, 'Build once: staging and production get the exact bytes that passed the tests.', { size: 12.5, color: 'muted' });
+  return figure(d, 'Each stage is a gate. The further right a change gets, the more confident you are, and the cheaper it is to ship small changes often.');
+};
+
+D['blue-green'] = () => {
+  const d = mk(720, 230, 'Blue-green deployment: two complete environments, a router switches all traffic from blue to green and back');
+  d.box(20, 80, 130, 60, 'users', { color: 'accent' });
+  d.box(220, 80, 140, 60, 'router', { sub: 'nginx / LB', color: 'text' });
+  d.box(450, 30, 230, 64, 'blue  v1.4 (live)', { sub: 'keeps running, ready for rollback', color: 'info' });
+  d.box(450, 130, 230, 64, 'green v1.5 (new)', { sub: 'deployed and tested first', color: 'ok' });
+  d.arrow(152, 110, 216, 110, { color: 'text' });
+  d.arrow(362, 100, 446, 62, { color: 'info', dash: '5 4', label: 'before', dy: -6, size: 11 });
+  d.arrow(362, 120, 446, 162, { color: 'ok', label: 'after the switch', dy: 18, size: 11 });
+  d.text(360, 220, 'Switch = one config change. Rollback = switch back. Canary = send 5% to green first.', { size: 12.5, color: 'muted' });
+  return figure(d, 'The new version is fully running before anyone sees it, and the old one stays warm until you are sure.');
+};
+
 export function renderDiagram(name) {
   const fn = D[name];
   if (!fn) return h('div', { class: 'figure' }, `Missing diagram: ${name}`);

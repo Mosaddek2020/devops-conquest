@@ -15,7 +15,8 @@ import { installPkg } from './sim/packages.js';
 import { unitState, startUnit } from './sim/systemd.js';
 import { httpRequest, connect } from './sim/net.js';
 import { normPath } from './sim/host.js';
-import { seedRemote, teammateCommit, reviewPR, createPR, mergePR } from './git/github.js';
+import { seedRemote, teammateCommit, reviewPR, createPR, mergePR, approveDeployment, ensureEnvironment } from './git/github.js';
+import { privateKeyFor } from './sim/cmd/system.js';
 import { stripAnsi } from './git/world.js';
 import { labExtensions } from './labext.js';
 
@@ -87,6 +88,23 @@ export function makeHelpers(uni, sh) {
     review(url, number, state, body, author = 'Priya Sharma') { const full = url.startsWith('https://') ? url : `https://github.com/${url}.git`; return reviewPR(uni, uni.remotes.get(full), number, { state, body, author }); },
     pr(url, opts) { const full = url.startsWith('https://') ? url : `https://github.com/${url}.git`; return createPR(uni, uni.remotes.get(full), { headRepo: full, ...opts }); },
     mergePR(url, number, method = 'squash') { const full = url.startsWith('https://') ? url : `https://github.com/${url}.git`; const b = uni.remotes.get(full); return mergePR(uni, b, b.meta.prs.find(p => p.number === number), method, { admin: true }); },
+    bare(url) { return uni.remotes.get(url.startsWith('https://') ? url : `https://github.com/${url}.git`); },
+    environment(url, name, { url: envUrl = null, reviewers = [], branches = null, tags = null } = {}) { const e = ensureEnvironment(H.bare(url), name, envUrl); Object.assign(e, { reviewers, branches, tags }); return e; },
+    secret(url, name, value) { const b = H.bare(url); b.meta.secrets = b.meta.secrets || {}; b.meta.secrets[name] = { updated: uni.time, value }; },
+    approve(url, { approve = true } = {}) { const b = H.bare(url); const run = b.meta.runs.find(r => r.status === 'waiting'); return run ? approveDeployment(uni, b, run.id, { by: uni.github.user, approve }) : null; },
+    // a CI deploy key: authorised for user on each host; returns the private key (store it as a secret)
+    deployKey(hosts, user = 'deploy', comment = 'ci@lumen') {
+      const pub = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIciDeployKey${comment.replace(/\W/g, '')} ${comment}\n`;
+      for (const hn of [].concat(hosts)) {
+        const hh = host(hn);
+        if (!hh.users.has(user)) hh.addUser(user, { shell: '/bin/bash' });
+        const home = hh.users.get(user).home;
+        hh.mkdirMeta(`${home}/.ssh`, user, 0o700);
+        hh.writeFile(`${home}/.ssh/authorized_keys`, (hh.files.get(`${home}/.ssh/authorized_keys`) || '') + pub, user);
+        hh.setMeta(`${home}/.ssh/authorized_keys`, { mode: 0o600, owner: user, group: user });
+      }
+      return privateKeyFor(pub);
+    },
     protect(url, branch, rule = { requirePR: true, requiredReviews: 1 }) { const full = url.startsWith('https://') ? url : `https://github.com/${url}.git`; uni.remotes.get(full).meta.protected[branch] = rule; },
   };
   for (const ext of labExtensions) Object.assign(H, ext.helpers?.(uni, sh, H) || {});

@@ -51,7 +51,7 @@ function parseBlock(toks, pos, file, depth, parent = null) {
       continue;
     }
     if (end.v === '}') throw new NginxConfigError(`directive "${name}" is not terminated by ";"`, file, line);
-    if (['server', 'location', 'http', 'events', 'upstream', 'types', 'if', 'map'].includes(name)) throw new NginxConfigError(`directive "${name}" has no opening "{"`, file, line);
+    if (['server', 'location', 'http', 'events', 'upstream', 'types', 'if', 'map'].includes(name) && !(name === 'server' && parent === 'upstream')) throw new NginxConfigError(`directive "${name}" has no opening "{"`, file, line);
     items.push({ name, args, file, line });
     pos++;
   }

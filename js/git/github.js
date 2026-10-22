@@ -578,7 +578,8 @@ export function runGh(ctx, args, git) {
       const o = ghOpts(rest, { val: ['--body', '-b'], alias: { '-b': '--body' } });
       const name = o._[0];
       if (!name) throw new GitError('secret name required', 1);
-      if (!o['--body']) throw new GitError('no secret value provided: use --body', 1);
+      if (o['--body'] === undefined && ctx.stdin) o['--body'] = String(ctx.stdin).replace(/\n$/, '');
+      if (!o['--body']) throw new GitError('no secret value provided: use --body or pipe it in (gh secret set NAME < file)', 1);
       if (!/^[A-Z_][A-Z0-9_]*$/i.test(name)) throw new GitError('secret names can only contain letters, numbers and _', 1);
       bare.meta.secrets[name.toUpperCase()] = { updated: w.time, value: String(o['--body']) };
       out.push(`✓ Set Actions secret ${name.toUpperCase()} for ${bare.meta.owner}/${bare.meta.name}`);

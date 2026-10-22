@@ -4,10 +4,13 @@ import { Universe } from './host.js';
 import { installSystemdTicker, unitState } from './systemd.js';
 import { UBUNTU_BASE, installPkg } from './packages.js';
 import { Session } from './session.js';
+import { installRunner } from './runner.js';
+import { privateKeyFor } from './cmd/system.js';
 
 export function newUniverse(opts = {}) {
   const uni = new Universe(opts);
   installSystemdTicker(uni);
+  installRunner(uni, addServer);
   uni.cronRunner = (host, user, cmd) => {
     const s = new Session(uni, host, { user });
     s.advancePerCommand = 0;
@@ -50,9 +53,10 @@ export function authorizeKey(uni, from, fromUser, to, toUser) {
   const keyPath = `${home}/.ssh/id_ed25519`;
   if (!from.files.has(keyPath)) {
     from.mkdirMeta(`${home}/.ssh`, fromUser, 0o700);
-    from.writeFile(keyPath, '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ\n-----END OPENSSH PRIVATE KEY-----\n', fromUser);
+    const pubKey = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${fromUser}${from.name}key ${fromUser}@${from.name}\n`;
+    from.writeFile(keyPath, privateKeyFor(pubKey), fromUser);
     from.setMeta(keyPath, { mode: 0o600 });
-    from.writeFile(keyPath + '.pub', `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${fromUser}${from.name}key ${fromUser}@${from.name}\n`, fromUser);
+    from.writeFile(keyPath + '.pub', pubKey, fromUser);
   }
   const pub = from.files.get(keyPath + '.pub');
   const th = to.users.get(toUser).home;
