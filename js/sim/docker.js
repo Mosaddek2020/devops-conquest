@@ -89,8 +89,8 @@ export function engineOf(host, uni) {
 
 // ---------------------------------------------------------------- containers
 
-function resolveCommand(img, override) {
-  const ep = img.config.entrypoint || [];
+function resolveCommand(img, override, epOverride = null) {
+  const ep = epOverride || img.config.entrypoint || [];
   const cmd = override && override.length ? override : (img.config.cmd || []);
   let argv = [...ep, ...cmd];
   if (argv[0] === '/bin/sh' && argv[1] === '-c') argv = argv[2].split(/\s+/);
@@ -98,7 +98,7 @@ function resolveCommand(img, override) {
   return argv;
 }
 
-export function createContainer(engine, img, { name, env = {}, ports = [], network = 'bridge', aliases = [], volumes = [], cmd = null, restart = 'no', user = null, workdir = null, memory = null, project = null, service = null, healthcheck = undefined, labels = {} } = {}) {
+export function createContainer(engine, img, { name, env = {}, ports = [], network = 'bridge', aliases = [], volumes = [], cmd = null, entrypoint = null, restart = 'no', user = null, workdir = null, memory = null, project = null, service = null, healthcheck = undefined, labels = {}, prepare = null } = {}) {
   const uni = engine.uni;
   const id = shortId();
   name = name || `${['eager', 'brave', 'calm', 'quirky', 'sharp'][engine.containers.size % 5]}_${['turing', 'hopper', 'lovelace', 'ritchie', 'torvalds'][(engine.containers.size * 3) % 5]}`;
@@ -108,7 +108,7 @@ export function createContainer(engine, img, { name, env = {}, ports = [], netwo
     if (busy && engine.host.procs.has(busy.pid)) throw new SimError(`docker: Error response from daemon: driver failed programming external connectivity on endpoint ${name}: Bind for 0.0.0.0:${p.host} failed: port is already allocated.`, 125);
   }
   if (!engine.networks.has(network)) throw new SimError(`docker: Error response from daemon: network ${network} not found.`, 125);
-  const ctr = { userSet: !!user, id, name, image: img, imageRef: [...img.tags][0] || img.id.slice(0, 12), env: { ...img.config.env, ...env }, ports, network, aliases: [name, ...aliases], volumes, cmd, restart, user: user || img.config.user || 'root', workdir: workdir || img.config.workdir || '/', memory, project, service, labels, created: uni.time, status: 'created', exitCode: null, logs: [], restarts: 0, health: null, healthcheck: healthcheck === undefined ? img.config.healthcheck : healthcheck };
+  const ctr = { prepare, entrypoint, userSet: !!user, id, name, image: img, imageRef: [...img.tags][0] || img.id.slice(0, 12), env: { ...img.config.env, ...env }, ports, network, aliases: [name, ...aliases], volumes, cmd, restart, user: user || img.config.user || 'root', workdir: workdir || img.config.workdir || '/', memory, project, service, labels, created: uni.time, status: 'created', exitCode: null, logs: [], restarts: 0, health: null, healthcheck: healthcheck === undefined ? img.config.healthcheck : healthcheck };
   engine.containers.set(id, ctr);
   return ctr;
 }
@@ -170,16 +170,18 @@ export function startContainer(engine, ctr) {
     };
     volumeFiles(engine, ctr, h);
   }
+  // callers (the Kubernetes kubelet) can lay down files and name resolution before the process starts
+  ctr.prepare?.(h);
   // official images refuse to start without required settings
-  const argv0 = resolveCommand(img, ctr.cmd)[0]?.split('/').pop();
+  const argv0 = resolveCommand(img, ctr.cmd, ctr.entrypoint)[0]?.split('/').pop();
   if (img.base?.postgres && argv0 === 'postgres' && !ctr.env.POSTGRES_PASSWORD) return exitWith(engine, ctr, 1, ['Error: Database is uninitialized and superuser password is not specified.', '       You must specify POSTGRES_PASSWORD to a non-empty value for the', '       superuser. For example, "-e POSTGRES_PASSWORD=password" on "docker run".']);
   if (img.base?.postgres) h.labDbPassword = ctr.env.POSTGRES_PASSWORD;
-  const argv = resolveCommand(img, ctr.cmd);
+  const argv = resolveCommand(img, ctr.cmd, ctr.entrypoint);
   const sink = line => { ctr.logs.push({ time: uni.time, line }); if (ctr.logs.length > 2000) ctr.logs.splice(0, 500); };
   ctr.status = 'running'; ctr.started = uni.time; ctr.exitCode = null;
   if (!argv.length) return exitWith(engine, ctr, 0, []);
   const bin = argv[0].split('/').pop();
-  if (!h.binaries.has(bin) && !['node', 'nginx', 'redis-server', 'postgres', 'python3', 'python', 'sleep', 'sh', 'bash', 'npm', 'gunicorn', 'uvicorn'].includes(bin)) return exitWith(engine, ctr, 127, [`docker: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: exec: "${argv[0]}": executable file not found in $PATH: unknown.`]);
+  if (!h.binaries.has(bin) && !['http-echo', 'node', 'nginx', 'redis-server', 'postgres', 'python3', 'python', 'sleep', 'sh', 'bash', 'npm', 'gunicorn', 'uvicorn'].includes(bin)) return exitWith(engine, ctr, 127, [`docker: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: exec: "${argv[0]}": executable file not found in $PATH: unknown.`]);
   if (!h.binaries.has(bin) && ['sh', 'bash'].includes(bin)) return exitWith(engine, ctr, 127, [`exec: "${bin}": executable file not found in $PATH`]);
   let r;
   if (bin === 'nginx') {
@@ -885,7 +887,7 @@ function composeCmd(c, eng, args) {
   return c.fail(`unknown docker command: "compose ${sub}"`, 1);
 }
 
-export { findContainer };
+export { findContainer, resolveCommand };
 
 // ---------------------------------------------------------------- client tools
 

@@ -55,4 +55,13 @@ export const SCENARIOS = {
     },
     panels: ['docker', 'files', 'system'],
   },
+  k8s: {
+    title: 'Kubernetes cluster',
+    note: 'A cluster called lumen (control plane + 2 workers) with an ingress controller; kubectl is configured. Try: kubectl get nodes, kubectl create deployment web --image=nginx:1.27 --replicas=3, kubectl expose deployment web --port=80, then curl it from a pod: kubectl run tmp --image=curlimages/curl --rm -it --restart=Never -- curl -s http://web',
+    setup(H) {
+      const c = H.cluster('lumen', { ingress: true });
+      H.dns('app.lumen.dev', c.ingressHost.ip);
+    },
+    panels: ['cluster', 'files'],
+  },
 };

@@ -60,6 +60,8 @@ export function connect(uni, from, name, port) {
   const target = t.host;
   if (target.down) return { error: 'ETIMEDOUT', ip: t.ip };
   if (!t.loopback) {
+    // pod and service IPs only route inside their cluster
+    if (target.clusterOnly && from.cluster !== target.clusterOnly) return { error: 'ETIMEDOUT', ip: t.ip };
     if (from.netBlocked?.(target)) return { error: 'ETIMEDOUT', ip: t.ip };
     if (!cloudAllows(uni, from, target, port)) return { error: 'ETIMEDOUT', ip: t.ip };
     if (!firewallAllows(target, from.ip, port)) return { error: 'ETIMEDOUT', ip: t.ip };

@@ -29,9 +29,11 @@ export const BASE_IMAGES = {
   'redis:7': { size: 117, os: 'debian', bins: [...COREUTILS, 'redis-server', 'redis-cli'], cmd: ['redis-server'], expose: [6379], redis: true, vulns: [0, 1, 8, 22] },
   'redis:7-alpine': { size: 41, os: 'alpine', bins: [...BUSYBOX, 'redis-server', 'redis-cli'], cmd: ['redis-server'], expose: [6379], redis: true, vulns: [0, 0, 1, 2] },
   'postgres:16': { size: 432, os: 'debian', bins: [...COREUTILS, 'postgres', 'psql', 'pg_dump', 'pg_isready'], cmd: ['postgres'], expose: [5432], postgres: true, vulns: [0, 2, 20, 45] },
+  'curlimages/curl:8.10.1': { size: 22, os: 'alpine', bins: [...BUSYBOX, 'curl'], cmd: ['curl'], user: 'curl_user', vulns: [0, 0, 0, 1] },
+  'hashicorp/http-echo:1.0': { size: 4.2, os: 'distroless', bins: ['http-echo'], cmd: [], entrypoint: ['/http-echo'], expose: [5678], vulns: [0, 0, 0, 0] },
   'postgres:16-alpine': { size: 243, os: 'alpine', bins: [...BUSYBOX, 'postgres', 'psql', 'pg_dump', 'pg_isready'], cmd: ['postgres'], expose: [5432], postgres: true, vulns: [0, 0, 2, 5] },
 };
-const ALIASES = { 'gcr.io/distroless/nodejs20-debian12:latest': 'gcr.io/distroless/nodejs20-debian12', 'gcr.io/distroless/nodejs20-debian12:nonroot': 'gcr.io/distroless/nodejs20-debian12', 'ubuntu': 'ubuntu:24.04', 'ubuntu:latest': 'ubuntu:24.04', 'alpine': 'alpine:3.20', 'alpine:latest': 'alpine:3.20', 'node': 'node:20', 'node:latest': 'node:20', 'node:lts': 'node:20', 'node:20-bookworm-slim': 'node:20-slim', 'nginx': 'nginx:1.27', 'nginx:latest': 'nginx:1.27', 'nginx:alpine': 'nginx:1.27-alpine', 'redis': 'redis:7', 'redis:latest': 'redis:7', 'redis:alpine': 'redis:7-alpine', 'postgres': 'postgres:16', 'postgres:latest': 'postgres:16', 'postgres:alpine': 'postgres:16-alpine', 'python': 'python:3.12', 'python:3.12-alpine': 'python:3.12-slim', 'debian': 'debian:bookworm-slim', 'busybox': 'busybox:1.36' };
+const ALIASES = { 'curlimages/curl': 'curlimages/curl:8.10.1', 'curlimages/curl:latest': 'curlimages/curl:8.10.1', 'hashicorp/http-echo': 'hashicorp/http-echo:1.0', 'hashicorp/http-echo:latest': 'hashicorp/http-echo:1.0', 'busybox:latest': 'busybox:1.36', 'gcr.io/distroless/nodejs20-debian12:latest': 'gcr.io/distroless/nodejs20-debian12', 'gcr.io/distroless/nodejs20-debian12:nonroot': 'gcr.io/distroless/nodejs20-debian12', 'ubuntu': 'ubuntu:24.04', 'ubuntu:latest': 'ubuntu:24.04', 'alpine': 'alpine:3.20', 'alpine:latest': 'alpine:3.20', 'node': 'node:20', 'node:latest': 'node:20', 'node:lts': 'node:20', 'node:20-bookworm-slim': 'node:20-slim', 'nginx': 'nginx:1.27', 'nginx:latest': 'nginx:1.27', 'nginx:alpine': 'nginx:1.27-alpine', 'redis': 'redis:7', 'redis:latest': 'redis:7', 'redis:alpine': 'redis:7-alpine', 'postgres': 'postgres:16', 'postgres:latest': 'postgres:16', 'postgres:alpine': 'postgres:16-alpine', 'python': 'python:3.12', 'python:3.12-alpine': 'python:3.12-slim', 'debian': 'debian:bookworm-slim', 'busybox': 'busybox:1.36' };
 
 let seq = 0;
 export const shortId = () => { seq++; let h = 0x9e3779b1 ^ seq; let out = ''; for (let i = 0; i < 64; i++) { h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0; out += (h & 15).toString(16); } return out; };
@@ -90,6 +92,7 @@ export function makeContainerHost(uni, name, { base, files = {}, users = null, b
   } else {
     if (base.nodeUser && !h.users.has('node')) h.addUser('node', { uid: 1000 });
     if (base.user === 'nonroot') h.addUser('nonroot', { uid: 65532, noHome: true });
+    if (base.user === 'curl_user') h.addUser('curl_user', { uid: 100, noHome: true });
     if (base.nginx) h.addUser('nginx', { uid: 101, shell: '/sbin/nologin', noHome: true });
     if (base.postgres) h.addUser('postgres', { uid: 999, home: '/var/lib/postgresql' });
     if (base.redis) h.addUser('redis', { uid: 999, noHome: true });

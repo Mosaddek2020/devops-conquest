@@ -378,6 +378,75 @@ D['registry-flow'] = () => {
   return figure(d, 'A tag is a name you can move; a digest (sha256:…) names exact bytes. Deploy immutable tags so "what is running" always has one answer.');
 };
 
+
+// ---------- Realm 7: Kubernetes ----------
+D['k8s-architecture'] = () => {
+  const d = mk(720, 280, 'A Kubernetes cluster: kubectl talks to the API server on the control plane; controllers and the scheduler act on stored desired state; a kubelet on each worker node runs the pods');
+  d.box(14, 110, 110, 56, 'kubectl', { sub: 'you', color: 'accent', titleSize: 13 });
+  d.box(160, 20, 250, 240, '', { color: 'info', dash: '6 4' });
+  d.text(176, 42, 'control plane', { anchor: 'start', size: 12.5, weight: 700, color: 'info' });
+  d.box(180, 56, 210, 40, 'API server', { color: 'info', titleSize: 13 });
+  d.box(180, 106, 100, 40, 'etcd', { sub: 'desired state', color: 'muted', titleSize: 12, subSize: 10 });
+  d.box(290, 106, 100, 40, 'scheduler', { color: 'muted', titleSize: 12 });
+  d.box(180, 156, 210, 40, 'controllers', { sub: 'deployment, replicaset…', color: 'muted', titleSize: 12, subSize: 10 });
+  d.text(285, 226, 'compare desired vs actual,', { size: 11.5, color: 'muted' });
+  d.text(285, 242, 'act, repeat forever', { size: 11.5, color: 'muted' });
+  [0, 1].forEach(k => {
+    const y = 30 + k * 125;
+    d.box(460, y, 246, 105, '', { color: 'text' });
+    d.text(474, y + 20, `worker node ${k + 1}`, { anchor: 'start', size: 12, weight: 700 });
+    d.box(474, y + 30, 70, 30, 'kubelet', { color: 'feat', titleSize: 11 });
+    d.box(552, y + 30, 70, 30, 'pod', { color: 'ok', titleSize: 11 });
+    d.box(630, y + 30, 64, 30, 'pod', { color: 'ok', titleSize: 11 });
+    d.box(474, y + 66, 220, 28, 'container runtime (containerd)', { color: 'muted', titleSize: 10.5 });
+  });
+  d.arrow(126, 138, 176, 82, { color: 'accent', label: 'apply', dy: -6, size: 11 });
+  d.arrow(392, 76, 456, 60, { color: 'info' });
+  d.arrow(392, 90, 456, 186, { color: 'info' });
+  return figure(d, 'You never start containers yourself. You write desired state to the API server; controllers and kubelets keep making reality match it, which is why a deleted pod comes back.');
+};
+
+D['k8s-objects'] = () => {
+  const d = mk(720, 260, 'How the main objects connect: a Deployment owns ReplicaSets, which own Pods; a Service finds Pods by label; an Ingress routes HTTP to Services');
+  d.box(20, 30, 150, 50, 'Deployment', { sub: 'replicas: 3, template', color: 'main', titleSize: 13, subSize: 10.5 });
+  d.box(20, 110, 150, 50, 'ReplicaSet', { sub: 'one per template version', color: 'feat', titleSize: 13, subSize: 10.5 });
+  [0, 1, 2].forEach(k => d.box(220 + k * 96, 190, 86, 50, 'Pod', { sub: 'app=shop', color: 'ok', titleSize: 13, subSize: 10.5 }));
+  d.arrow(95, 82, 95, 106, { color: 'text', label: 'owns', dy: 0, lx: 128, size: 11 });
+  d.arrow(120, 162, 250, 188, { color: 'text', label: 'owns', dy: -4, size: 11 });
+  d.box(330, 100, 150, 50, 'Service shop', { sub: 'selector app=shop', color: 'info', titleSize: 13, subSize: 10.5 });
+  d.arrow(405, 152, 360, 186, { color: 'info', dash: '5 4' });
+  d.arrow(405, 152, 410, 186, { color: 'info', dash: '5 4' });
+  d.arrow(405, 152, 455, 186, { color: 'info', dash: '5 4', label: 'matches labels', dy: -2, lx: 520, size: 11 });
+  d.box(330, 20, 150, 50, 'Ingress', { sub: 'shop.lumen.dev/ → shop:80', color: 'accent', titleSize: 13, subSize: 10 });
+  d.arrow(405, 72, 405, 96, { color: 'accent' });
+  d.box(540, 20, 160, 50, 'ConfigMap / Secret', { sub: 'env or files', color: 'warn', titleSize: 12, subSize: 10.5 });
+  d.arrow(560, 72, 520, 186, { color: 'warn', dash: '4 4', label: 'injected into', dy: 0, lx: 600, ly: 130, size: 11 });
+  return figure(d, 'Labels are the glue. A Service has no list of pods: it selects whatever pods carry its labels right now, and only the ready ones get traffic.');
+};
+
+D['k8s-rolling'] = () => {
+  const d = mk(720, 230, 'A rolling update: new pods are added and must pass readiness before old pods are removed, so capacity never drops below the minimum');
+  const steps = [['start', [0, 0, 0], []], ['surge', [0, 0, 0], [1]], ['ready → swap', [0, 0], [1, 1]], ['…', [0], [1, 1, 1]], ['done', [], [1, 1, 1]]];
+  steps.forEach(([t, olds, news], k) => {
+    const x = 20 + k * 140;
+    d.text(x + 55, 30, t, { size: 12, weight: 700 });
+    olds.forEach((_, i) => d.box(x + 8, 44 + i * 36, 96, 28, 'v1', { color: 'info', titleSize: 11 }));
+    news.forEach((ok, i) => d.box(x + 8, 44 + (olds.length + i) * 36, 96, 28, k === 1 ? 'v2 (starting)' : 'v2', { color: k === 1 ? 'warn' : 'ok', titleSize: 11, dash: k === 1 ? '4 3' : null }));
+    if (k) d.arrow(x - 18, 100, x - 4, 100, { color: 'text' });
+  });
+  d.text(360, 214, 'A v2 pod that never becomes ready stops the rollout here, with v1 still serving: then `kubectl rollout undo`.', { size: 12, color: 'muted' });
+  return figure(d, 'maxSurge sets how many extra pods may exist during the update; maxUnavailable how many may be missing. Readiness probes are what make this safe.');
+};
+
+D['k8s-probes'] = () => {
+  const d = mk(720, 220, 'Readiness and liveness probes: readiness controls traffic, liveness controls restarts');
+  d.box(20, 40, 210, 140, 'readinessProbe', { sub: '"can you take traffic now?"\n\nfail → removed from the\nService endpoints\n(pod keeps running)', color: 'info', titleSize: 14, subSize: 11.5 });
+  d.box(255, 40, 210, 140, 'livenessProbe', { sub: '"are you stuck?"\n\nfail N times → kubelet\nkills and restarts the\ncontainer', color: 'warn', titleSize: 14, subSize: 11.5 });
+  d.box(490, 40, 210, 140, 'resources', { sub: 'requests: reserved for\nscheduling\nlimits: the ceiling\nmemory over limit →\nOOMKilled (exit 137)', color: 'bad', titleSize: 14, subSize: 11.5 });
+  d.text(360, 208, 'Do not point liveness at a check that depends on the database: a DB blip would restart every pod at once.', { size: 12, color: 'muted' });
+  return figure(d, 'Probes and resources are how you tell Kubernetes what "healthy" and "enough" mean for your app. Without them it can only guess.');
+};
+
 export function renderDiagram(name) {
   const fn = D[name];
   if (!fn) return h('div', { class: 'figure' }, `Missing diagram: ${name}`);

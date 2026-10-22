@@ -220,6 +220,8 @@ export class NodeApp {
       const auth = c.listener.program?.checkAuth?.(url);
       if (auth) return { ok: false, code: 1, logs: [auth, '', 'Node.js v20.18.0'] };
     }
+    // apps that hold a big in-memory cache say so: const CACHE_SIZE_MB = …
+    if (scope.CACHE_SIZE_MB !== undefined && Number.isFinite(Number(scope.CACHE_SIZE_MB))) this.memMB = 48 + Number(scope.CACHE_SIZE_MB);
     if (!this.listenExpr) return { ok: true, ports: [], logs: [], oneShot: true };
     let port;
     try { port = Number(evalJs(this.listenExpr, scope)); } catch { port = NaN; }
@@ -375,6 +377,13 @@ class Datastore {
   }
   handle() { return { error: 'EMPTY', detail: 'Empty reply from server' }; }
 }
+
+// hashicorp/http-echo: answers every request with the text it was started with
+programFactories.set('http-echo', ({ argv }) => {
+  const text = (argv.find(x => x.startsWith('-text=')) || '-text=hello-world').slice(6).replace(/^["']|["']$/g, '');
+  const port = Number(((argv.find(x => x.startsWith('-listen=')) || '-listen=:5678').split(':').pop()));
+  return { kind: 'http-echo', memMB: 4, start: () => ({ ok: true, ports: [{ port, addr: '0.0.0.0' }], logs: [`${new Date().toISOString().slice(0, 10)} [INFO] server is listening on :${port}`] }), handle: () => ({ status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: text + '\n' }) };
+});
 
 // ---------- launching ----------
 export function resolveProgram(host, argv, { cwd, env, user, uni }) {

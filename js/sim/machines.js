@@ -7,6 +7,7 @@ import { Session } from './session.js';
 import { installRunner } from './runner.js';
 import { privateKeyFor } from './cmd/system.js';
 import { installDockerTicker, engineOf } from './docker.js';
+import { installK8sTicker } from './k8s.js';
 import { programFactories } from './runtime.js';
 
 programFactories.set('dockerd', () => ({ memMB: 70, start: () => ({ ok: true, ports: [], logs: ['API listen on /run/docker.sock'] }), handle: () => ({ error: 'EMPTY' }) }));
@@ -16,6 +17,7 @@ export function newUniverse(opts = {}) {
   installSystemdTicker(uni);
   installRunner(uni, addServer);
   installDockerTicker(uni);
+  installK8sTicker(uni);
   uni.dockerInstall = h => engineOf(h, uni);
   uni.cronRunner = (host, user, cmd) => {
     const s = new Session(uni, host, { user });
