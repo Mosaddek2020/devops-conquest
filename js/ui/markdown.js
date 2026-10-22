@@ -41,8 +41,9 @@ function parseKV(body) {
     if (!m) continue;
     const [, k, v] = m;
     if (k === 'step') {
-      const [cmd, ...cap] = v.split(' | ');
-      spec.steps.push({ cmd: cmd.trim(), caption: cap.join(' | ').trim() });
+      // the caption follows the LAST " | ", so commands may contain pipes
+      const k = v.lastIndexOf(' | ');
+      spec.steps.push(k < 0 ? { cmd: v.trim(), caption: '' } : { cmd: v.slice(0, k).trim(), caption: v.slice(k + 3).trim() });
     } else if (k === 'setup') spec.setup.push(...v.split(/;\s*/).filter(Boolean));
     else spec[k] = v;
   }

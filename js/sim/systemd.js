@@ -152,6 +152,7 @@ export function installSystemdTicker(uni) {
           startUnit(host, uni, st.name);
         }
       }
+      for (const p of [...host.procs.values()]) if (p.expires && host.time >= p.expires) host.killProc(p.pid, 'EXIT');
       runCron(host, uni);
     }
   });

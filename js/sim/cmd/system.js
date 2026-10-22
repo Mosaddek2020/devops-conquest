@@ -239,6 +239,7 @@ function deliver(c, p, sig) {
   if (c.user !== 'root' && p.user !== c.user) return `kill: (${p.pid}) - Operation not permitted`;
   if (sig === 'HUP' && p.program?.reload) { try { p.program.reload(); } catch (e) { return e.message; } return null; }
   if (sig === '0') return null;
+  if (p.ignoreTerm && ['TERM', 'INT', 'HUP'].includes(sig)) { c.uni.emit({ type: 'kill', host: c.host.name, pid: p.pid, cmd: p.cmd, signal: sig, ignored: true }); return null; }
   c.host.killProc(p.pid, sig);
   c.uni.emit({ type: 'kill', host: c.host.name, pid: p.pid, cmd: p.cmd, signal: sig });
   return null;

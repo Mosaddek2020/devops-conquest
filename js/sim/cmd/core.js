@@ -491,11 +491,12 @@ def('du', c => {
     if (!c.host.stat(ta)) { c.eprint(`du: cannot access '${t}': No such file or directory`); continue; }
     const sizes = new Map();
     for (const [p, st] of f.walk(t)) {
-      if (st.type !== 'file') continue;
-      const sz = Math.max(4096, fileSize(c.host, p, st));
+      if (st.denied) continue;
+      const sz = st.type === 'dir' ? 4096 : Math.max(4096, fileSize(c.host, p, st));
+      if (st.type === 'dir') sizes.set(p, (sizes.get(p) || 0) + sz);
+      else if (o['-a']) sizes.set(p, sz);
       let d = p;
-      while (true) { d = dirname(d); if (d.length < ta.length) break; sizes.set(d, (sizes.get(d) || 0) + sz); if (d === ta) break; }
-      if (o['-a']) sizes.set(p, sz);
+      while (d !== ta && d.length > ta.length) { d = dirname(d); sizes.set(d, (sizes.get(d) || 0) + sz); }
     }
     if (c.host.stat(ta).type === 'file') sizes.set(ta, fileSize(c.host, ta, c.host.stat(ta)));
     const rows = [...sizes].filter(([p]) => { const depth = p === ta ? 0 : p.slice(ta.length).split('/').filter(Boolean).length; return depth <= maxd; }).sort((a, b) => b[0].length - a[0].length);
@@ -609,6 +610,14 @@ def(['which', 'whereis'], c => {
 // ---------- small utilities ----------
 def('sleep', c => {
   const s = c.args.reduce((t, a) => { const m = String(a).match(/^(\d+(?:\.\d+)?)([smhd]?)$/); return m ? t + Number(m[1]) * ({ s: 1, m: 60, h: 3600, d: 86400, '': 1 })[m[2]] : t; }, 0);
+  if (c.bg) {
+    const p = c.host.addProc({ cmd: `sleep ${c.args.join(' ')}`, user: c.user, mem: 1, cpu: 0 });
+    p.expires = c.uni.time + Math.round(s);
+    const n = c.sh.jobs.push({ pid: p.pid, cmd: `sleep ${c.args.join(' ')}` });
+    c.e.lastBg = p.pid;
+    c.eprint(`[${n}] ${p.pid}`);
+    return 0;
+  }
   c.uni.advance(Math.round(s));
   return 0;
 });

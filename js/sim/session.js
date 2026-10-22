@@ -367,6 +367,7 @@ export class Session {
 
   // ---------- simple commands ----------
   execSimple(node, e, io, result, flags) {
+    e.__subStatus = undefined;
     // expand words
     let argv = [];
     try {
@@ -387,8 +388,11 @@ export class Session {
       } else val = this.expandString(m[5], e, { assign: true });
       assigns.push({ name: m[1], idx: m[3], append: m[4] === '+', val });
     }
+    if (this.pendingErr?.length) io.err(this.pendingErr.splice(0).join(''));
     if (!argv.length) {
       for (const a of assigns) this.assign(e, a);
+      // an assignment's status is that of its last command substitution (so set -e sees failures)
+      if (e.__subStatus !== undefined) { const st = e.__subStatus; e.__subStatus = undefined; if (node.redirs.length) { try { const r = this.applyRedirs(node.redirs, e, io); r.flush(); } catch (err) { if (err instanceof SimError) { io.err(err.message + '\n'); return 1; } throw err; } } return st; }
       if (node.redirs.length) { try { const r = this.applyRedirs(node.redirs, e, io); r.flush(); } catch (err) { if (err instanceof SimError) { io.err(err.message + '\n'); return 1; } throw err; } }
       return 0;
     }
@@ -830,6 +834,7 @@ export class Session {
       else throw err;
     }
     e.lastStatus = code;
+    e.__subStatus = code;
     return stripAnsi(chunks.join('')).replace(/\n+$/, '');
   }
 
@@ -1046,7 +1051,14 @@ const SHELL_BUILTINS = {
       const a = args[i];
       if (a === '--') { e.positional = args.slice(i + 1); break; }
       if (a === '-o' || a === '+o') { const opt = args[++i]; const on = a === '-o'; if (opt === 'pipefail') e.opts.pipefail = on; else if (opt === 'errexit') e.opts.e = on; else if (opt === 'nounset') e.opts.u = on; else if (opt === 'xtrace') e.opts.x = on; continue; }
-      if (/^[-+][euxv]+$/.test(a)) { const on = a[0] === '-'; for (const f of a.slice(1)) if (f in e.opts) e.opts[f] = on; continue; }
+      if (/^[-+][euxvo]+$/.test(a)) {
+        const on = a[0] === '-';
+        for (const f of a.slice(1)) {
+          if (f === 'o') { const opt = args[++i]; if (opt === 'pipefail') e.opts.pipefail = on; else if (opt === 'errexit') e.opts.e = on; else if (opt === 'nounset') e.opts.u = on; else if (opt === 'xtrace') e.opts.x = on; continue; }
+          if (f in e.opts) e.opts[f] = on;
+        }
+        continue;
+      }
       e.positional = args.slice(i); break;
     }
     return 0;
@@ -1130,7 +1142,7 @@ const SHELL_BUILTINS = {
   wait() { return 0; },
   trap() { return 0; },
   umask(args, e, io) { if (!args.length) io.out('0022\n'); return 0; },
-  jobs(args, e, io) { this.jobs.forEach((j, k) => io.out(`[${k + 1}]${k === this.jobs.length - 1 ? '+' : '-'}  Running                 ${j.cmd} &\n`)); return 0; },
+  jobs(args, e, io) { this.jobs.forEach((j, k) => { const alive = e.host.procs.has(j.pid); if (!alive && j.reported) return; io.out(`[${k + 1}]${k === this.jobs.length - 1 ? '+' : '-'}  ${alive ? 'Running' : 'Done   '}                 ${j.cmd}${alive ? ' &' : ''}${args.includes('-l') ? '  (pid ' + j.pid + ')' : ''}\n`); if (!alive) j.reported = true; }); return 0; },
   clear(args, e, io, result) { if (result) result.clear = true; return 0; },
   reset(args, e, io, result) { if (result) result.clear = true; return 0; },
 };

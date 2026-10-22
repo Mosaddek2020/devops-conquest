@@ -66,6 +66,7 @@ export function makeHelpers(uni, sh) {
     // a plain background process (no ports), e.g. a runaway job or an app holding a log open
     proc(on, { cmd, user = 'root', mem = 20, cpu = 0.2, openFiles = [], unit = null, state = 'S' }) { const hh = host(on); const p = hh.addProc({ cmd, user, mem, cpu, unit }); p.openFiles = openFiles; p.state = state; return p; },
     load(on, avg) { host(on).loadAvg = avg; },
+    age(on, path, days) { const hh = host(on); hh.setMeta(path, { mtime: uni.time - Math.round(days * 86400) }); },
     // a website on "the internet": routes map a path (or '*') to { status, body, headers } or a function(req)
     site(hostname, routes, { ip } = {}) {
       uni.dns.set(hostname, ip || `203.0.113.${10 + uni.httpHooks.length}`);
