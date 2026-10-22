@@ -203,6 +203,37 @@ def(['nc', 'netcat', 'telnet'], c => {
   return ok ? 0 : 1;
 });
 
+def('nmap', c => {
+  const o = opts(c.args, { bool: ['-sT', '-sV', '-Pn', '-v', '-F'], val: ['-p'] });
+  const target = o._[0];
+  if (!target) return c.fail('Nmap 7.94SVN: no target specified', 1);
+  const t = resolveTarget(c.uni, c.host, target);
+  if (t.error === 'ENOTFOUND') return c.fail(`Failed to resolve "${target}".\nWARNING: No targets were specified, so 0 hosts scanned.`, 1);
+  const spec = o['-p'] || '1-10000';
+  const ports = spec === '-' ? Array.from({ length: 65535 }, (_, k) => k + 1) : spec.split(',').flatMap(r => { const [a, b] = r.split('-').map(Number); return b ? Array.from({ length: Math.min(b - a + 1, 65535) }, (_, k) => a + k) : [a]; });
+  const NAMES = { 22: 'ssh', 25: 'smtp', 53: 'domain', 80: 'http', 443: 'https', 3000: 'ppp', 3306: 'mysql', 5432: 'postgresql', 6379: 'redis', 8080: 'http-proxy', 9090: 'zeus-admin', 9100: 'jetdirect', 27017: 'mongod' };
+  c.print(`Starting Nmap 7.94SVN ( https://nmap.org ) at ${fmtDate(c.uni.time, '%F %H:%M')} UTC`, `Nmap scan report for ${target} (${t.ip})`);
+  if (t.host?.down) { c.print('Host seems down. If it is really up, but blocking our ping probes, try -Pn'); return 0; }
+  const rows = [];
+  let filtered = 0, closed = 0;
+  const interesting = new Set([...ports.filter(p => t.host?.listening.has(p)), ...ports.filter(p => NAMES[p])]);
+  for (const p of ports) {
+    if (!interesting.has(p)) { closed++; continue; }
+    const r = connect(c.uni, c.host, target, p);
+    if (!r.error) rows.push([p, 'open']);
+    else if (r.error === 'ETIMEDOUT') { if (t.host?.listening.has(p)) rows.push([p, 'filtered']); else filtered++; }
+    else closed++;
+  }
+  const fw = t.host && !t.loopback && t.host.firewall.enabled;
+  if (fw) c.print(`Not shown: ${ports.length - rows.length} filtered tcp ports (no-response)`); else c.print(`Not shown: ${ports.length - rows.length} closed tcp ports (conn-refused)`);
+  c.print('PORT      STATE    SERVICE');
+  for (const [p, st] of rows) c.print(`${(p + '/tcp').padEnd(9)} ${st.padEnd(8)} ${NAMES[p] || 'unknown'}`);
+  c.print('', `Nmap done: 1 IP address (1 host up) scanned in 1.${String(rows.length * 7 % 100).padStart(2, '0')} seconds`);
+  c.uni.emit({ type: 'nmap', host: c.host.name, target, open: rows.filter(r => r[1] === 'open').map(r => r[0]) });
+  void filtered; void closed;
+  return 0;
+}, { pkg: 'nmap' });
+
 // ---------- ufw ----------
 def('ufw', c => {
   const h = c.host;
@@ -243,9 +274,15 @@ def('ufw', c => {
     case 'enable': {
       const sshOk = fw.rules.some(r => r.action === 'allow' && (r.port === 22 || r.ports?.includes(22)) && (!r.from || r.from === 'any'));
       fw.enabled = true;
-      if (!sshOk && c.sh.stack.some(s => s.loginKind === 'ssh') || (!sshOk && c.sh.e.loginKind === 'ssh')) { c.uni.emit({ type: 'ufw-lockout', host: h.name }); }
       c.print('Command may disrupt existing ssh connections. Proceed with operation (y|n)? y', 'Firewall is active and enabled on system startup');
       c.uni.emit({ type: 'ufw', host: h.name, action: 'enable', sshAllowed: sshOk });
+      const viaSsh = [c.sh.e, ...c.sh.stack].some(x => x.host === h && x.loginKind === 'ssh');
+      if (!sshOk && viaSsh && h.firewall.defaultIn === 'deny') {
+        c.uni.emit({ type: 'ufw-lockout', host: h.name });
+        // the SSH connection drops: unwind back to the machine you connected from
+        while (c.sh.stack.length && [c.sh.e, ...c.sh.stack.slice(1)].some(x => x.host === h)) c.sh.e = c.sh.stack.pop();
+        c.print('', C.red(`client_loop: send disconnect: Broken pipe`), C.yellow(`You enabled the firewall without allowing SSH (port 22), so ${h.name} just dropped your connection.`), C.dim(`Recover through the cloud provider's web console: console ${h.name}`));
+      }
       return 0;
     }
     case 'disable': fw.enabled = false; c.print('Firewall stopped and disabled on system startup'); c.uni.emit({ type: 'ufw', host: h.name, action: 'disable' }); return 0;
@@ -371,11 +408,24 @@ def('certbot', c => {
     // insert listen 443 ssl + certs before the closing brace of that server block
     let depth = 0, start = -1, end = -1;
     for (let k = srv.line - 1; k < lines.length; k++) { depth += (lines[k].match(/\{/g) || []).length; depth -= (lines[k].match(/\}/g) || []).length; if (start < 0) start = k; if (depth === 0 && k >= start && /\}/.test(lines[k])) { end = k; break; } }
-    const add = [`    listen 443 ssl; # managed by Certbot`, `    ssl_certificate /etc/letsencrypt/live/${name}/fullchain.pem; # managed by Certbot`, `    ssl_certificate_key /etc/letsencrypt/live/${name}/privkey.pem; # managed by Certbot`];
-    lines.splice(end, 0, ...add);
+    const block = lines.slice(start, end + 1).join('\n');
+    if (/ssl_certificate\s/.test(block)) {
+      for (let k = start; k <= end; k++) {
+        if (/^\s*ssl_certificate\s/.test(lines[k])) lines[k] = `    ssl_certificate /etc/letsencrypt/live/${name}/fullchain.pem; # managed by Certbot`;
+        if (/^\s*ssl_certificate_key\s/.test(lines[k])) lines[k] = `    ssl_certificate_key /etc/letsencrypt/live/${name}/privkey.pem; # managed by Certbot`;
+      }
+    } else {
+      lines.splice(end, 0, `    listen 443 ssl; # managed by Certbot`, `    ssl_certificate /etc/letsencrypt/live/${name}/fullchain.pem; # managed by Certbot`, `    ssl_certificate_key /etc/letsencrypt/live/${name}/privkey.pem; # managed by Certbot`);
+    }
     text = lines.join('\n');
-    text = text.replace(/listen 80( default_server)?;/, '# listen 80$1; moved to the redirect block below by Certbot');
-    text += `\nserver {\n    listen 80;\n    server_name ${domains.join(' ')};\n    return 301 https://$host$request_uri; # managed by Certbot\n}\n`;
+    const hasRedirect = /return 301 https:\/\/\$host\$request_uri/.test(text);
+    if (!hasRedirect) {
+      const otherPort80 = conf.servers.some(s2 => s2 !== srv && s2.listens.some(l => l.port === 80) && s2.names.some(n => domains.includes(n)));
+      if (!otherPort80) {
+        text = text.replace(/listen 80( default_server)?;/, '# listen 80$1; moved to the redirect block below by Certbot');
+        text += `\nserver {\n    listen 80;\n    server_name ${domains.join(' ')};\n    return 301 https://$host$request_uri; # managed by Certbot\n}\n`;
+      }
+    }
     h.writeSys(srv.file, text);
     const master = [...h.procs.values()].find(p => p.program instanceof Nginx);
     try { master?.program.reload(); } catch (e) { c.eprint(e.message); return 1; }

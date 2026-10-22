@@ -444,6 +444,18 @@ def('nginx', c => {
   return c.fail(C.dim('(start nginx through systemd: sudo systemctl start nginx)'), 1);
 });
 
+// ---------- the cloud provider's web console (lab feature) ----------
+def('console', c => {
+  const name = c.args[0];
+  if (!name) return c.fail('usage: console <machine>   (the cloud provider\'s browser console)', 1);
+  if (!c.uni.consoleHosts?.includes(name) || !c.uni.host(name)) return c.fail(`console: no cloud console available for "${name}"`, 1);
+  const target = c.uni.host(name);
+  c.print(C.dim(`Connecting to the serial console of ${name} through the cloud provider (no SSH, no firewall in the way)…`), '', `Ubuntu 24.04 LTS ${name} ttyS0`, '', `${name} login: root (console session)`);
+  c.uni.emit({ type: 'console', host: name });
+  c.sh.enter(target, 'root', { kind: 'console' });
+  return 0;
+}, { always: true });
+
 // ---------- ssh ----------
 function keyFiles(host, user) {
   const home = host.users.get(user)?.home || '/root';
@@ -581,6 +593,12 @@ def(['scp', 'rsync'], c => {
   const D = parse(dst);
   const endpoint = (x) => {
     if (x.local !== undefined) return { host: c.host, user: c.user, path: c.resolve(x.local) };
+    const cfg = c.host.files.get(`${c.host.users.get(c.user)?.home}/.ssh/config`) || '';
+    for (const block of cfg.split(/^Host\s+/m).slice(1)) {
+      const [names, ...lines] = block.split('\n');
+      if (!names.trim().split(/\s+/).includes(x.host)) continue;
+      for (const l of lines) { const m = l.trim().match(/^(\w+)\s+(.+)$/); if (!m) continue; if (m[1] === 'HostName') x.host = m[2]; if (m[1] === 'User' && x.user === c.user) x.user = m[2]; }
+    }
     const conn = connect(c.uni, c.host, x.host, 22);
     if (conn.error) throw new SimError(`ssh: connect to host ${x.host} port 22: ${conn.error === 'ENOTFOUND' ? 'Could not resolve hostname' : conn.error === 'ETIMEDOUT' ? 'Connection timed out' : 'Connection refused'}\n${c.name === 'scp' ? 'scp: Connection closed' : 'rsync: connection unexpectedly closed'}`, 255);
     if (!sshAuth(c, conn.host, x.user, o['-i'])) throw new SimError(`${x.user}@${x.host}: Permission denied (publickey).\n${c.name === 'scp' ? 'scp: Connection closed' : 'rsync: connection unexpectedly closed (0 bytes received so far) [sender]'}`, 255);

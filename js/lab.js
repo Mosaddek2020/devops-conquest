@@ -66,6 +66,8 @@ export function makeHelpers(uni, sh) {
     // a plain background process (no ports), e.g. a runaway job or an app holding a log open
     proc(on, { cmd, user = 'root', mem = 20, cpu = 0.2, openFiles = [], unit = null, state = 'S' }) { const hh = host(on); const p = hh.addProc({ cmd, user, mem, cpu, unit }); p.openFiles = openFiles; p.state = state; return p; },
     load(on, avg) { host(on).loadAvg = avg; },
+    // the cloud provider's browser console: a root shell that bypasses SSH and the firewall
+    console(...names) { uni.consoleHosts = [...(uni.consoleHosts || []), ...names]; },
     age(on, path, days) { const hh = host(on); hh.setMeta(path, { mtime: uni.time - Math.round(days * 86400) }); },
     // a website on "the internet": routes map a path (or '*') to { status, body, headers } or a function(req)
     site(hostname, routes, { ip } = {}) {
@@ -74,7 +76,8 @@ export function makeHelpers(uni, sh) {
         if (url.host !== hostname) return null;
         const r = routes[url.path] ?? routes['*'];
         if (r === undefined) return { status: 404, headers: { 'content-type': 'text/plain' }, body: 'Not Found' };
-        const res = typeof r === 'function' ? r({ path: url.path, method, headers, body, query: url.query }) : r;
+        const hdrs = Object.fromEntries(Object.entries(headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
+        const res = typeof r === 'function' ? r({ path: url.path, method, headers: hdrs, body, query: url.query }) : r;
         return { status: res.status || 200, headers: { 'content-type': /^\s*[{[]/.test(res.body || '') ? 'application/json' : 'text/html', ...(res.headers || {}) }, body: res.body ?? '' };
       });
     },
