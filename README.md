@@ -8,6 +8,9 @@ Each lesson teaches through several lenses (story, mental model, commands, analo
 practice, traps), then a hands-on lab graded from the simulator's real state, then a quiz.
 You unlock the next lesson by passing it.
 
+Live at **https://mosaddek2020.github.io/devops-conquest/** (every push to `main` is
+tested, built and deployed by `.github/workflows/pages.yml`).
+
 ## Realms
 
 | # | Realm | Lessons |
