@@ -599,6 +599,42 @@ D['chaos-loop'] = () => {
   return figure(d, 'Chaos engineering is careful science, not random breakage: start in staging, keep the blast radius small, and stop when the steady state breaks.');
 };
 
+// ---------- Realm 11: DevSecOps ----------
+D['shift-left'] = () => {
+  const d = mk(720, 210, 'Shifting security left: checks at every stage of delivery, cheapest where problems start');
+  const st = [['design', 'threat model', 'info'], ['code', 'SAST · secrets hook', 'main'], ['build', 'SCA · SBOM · sign', 'warn'], ['deploy', 'IaC scan · policy', 'accent'], ['run', 'DAST · audit · alerts', 'ok']];
+  st.forEach(([t, sub, c], k) => { d.box(10 + k * 142, 40, 128, 70, t, { sub, color: c, titleSize: 14, subSize: 10.5 }); if (k) d.arrow(10 + k * 142 - 12, 75, 10 + k * 142 - 2, 75, { color: 'text' }); });
+  d.text(360, 145, 'cost to fix a problem found here →', { size: 12, color: 'muted' });
+  [1, 2, 4, 8, 30].forEach((x, k) => d.text(74 + k * 142, 172, `${x}×`, { size: 14, weight: 700, color: k > 2 ? 'bad' : k ? 'warn' : 'ok' }));
+  return figure(d, 'Shift left does not mean "only early": each stage catches what the previous ones could not see, and production is still watched.');
+};
+
+D['leak-response'] = () => {
+  const d = mk(720, 200, 'Responding to a leaked credential: contain and rotate before you clean up');
+  const st = [['1 · contain', 'deactivate the key', 'bad'], ['2 · replace', 'new key, deploy it', 'warn'], ['3 · investigate', 'CloudTrail: what did it do?', 'info'], ['4 · clean up', 'delete old key, purge, guard rails', 'ok']];
+  st.forEach(([t, sub, c], k) => { d.box(10 + k * 178, 40, 162, 74, t, { sub, color: c, titleSize: 14, subSize: 10.5 }); if (k) d.arrow(10 + k * 178 - 14, 77, 10 + k * 178 - 2, 77, { color: 'text' }); });
+  d.text(360, 150, 'Assume it was used: scrapers find keys on public GitHub within minutes.', { size: 12.5 });
+  d.text(360, 176, 'Rewriting git history does not un-leak a secret. Rotation does.', { size: 12.5, color: 'bad', weight: 700 });
+  return figure(d, 'Keep the order: deactivating first stops the damage; deleting the old key only after the new one works avoids an outage of your own.');
+};
+
+D['supply-chain'] = () => {
+  const d = mk(720, 220, 'A software supply chain: every link can be attacked, so record what went in and prove who built what comes out');
+  const st = [['source', 'reviewed commits', 'main'], ['dependencies', 'lock file · SBOM', 'warn'], ['CI build', 'pinned actions', 'info'], ['registry', 'image@sha256 + signature', 'accent'], ['deploy', 'cosign verify', 'ok']];
+  st.forEach(([t, sub, c], k) => { d.box(10 + k * 142, 40, 128, 70, t, { sub, color: c, titleSize: 13, subSize: 10 }); if (k) d.arrow(10 + k * 142 - 12, 75, 10 + k * 142 - 2, 75, { color: 'text' }); });
+  d.text(360, 150, 'attacks: typosquatted package · compromised action · leaked push token · tag overwritten', { size: 12, color: 'bad' });
+  d.text(360, 182, 'defences: lock + scan dependencies · pin by SHA · sign in CI · verify the digest before running', { size: 12, color: 'ok' });
+  return figure(d, 'A signature ties the image digest to a key only CI holds; production refuses anything it cannot verify.');
+};
+
+D['pod-security'] = () => {
+  const d = mk(720, 210, 'Pod Security Standards: a namespace label decides how much a pod may ask for');
+  [['privileged', 'no restrictions', 'bad'], ['baseline', 'no privileged, hostPath, host namespaces', 'warn'], ['restricted', 'non-root, no escalation, drop ALL, seccomp', 'ok']].forEach(([t, sub, c], k) => d.box(20 + k * 235, 30, 210, 76, t, { sub, color: c, titleSize: 15, subSize: 10.5 }));
+  d.text(360, 140, 'kubectl label ns shop pod-security.kubernetes.io/enforce=restricted', { size: 12.5, font: 'mono' });
+  d.text(360, 172, 'Deployments are accepted with a warning; their pods are refused (FailedCreate events).', { size: 12.5, color: 'muted' });
+  return figure(d, 'Roll out with warn first, fix the manifests, then enforce. Exceptions get their own namespace and a reason.');
+};
+
 export function renderDiagram(name) {
   const fn = D[name];
   if (!fn) return h('div', { class: 'figure' }, `Missing diagram: ${name}`);

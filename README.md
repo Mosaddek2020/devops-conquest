@@ -26,6 +26,7 @@ tested, built and deployed by `.github/workflows/pages.yml`).
 | 8 | Infrastructure as Code: Terraform (plans, state, drift, modules, safe changes) and Ansible (playbooks, templates, handlers, vault) | 8 |
 | 9 | Observability: golden signals, Prometheus, PromQL, dashboards, alerting, logs, traces, SLOs | 9 |
 | 10 | Reliability: redundancy and failover, incident response, runbook automation, blameless postmortems, backups and restores, game days | 7 |
+| 11 | DevSecOps: threat modelling and hardening, secrets and key rotation, SAST, DAST, SBOMs and image signing, IaC scanning, pod security, CI security gates | 9 |
 
 ## How it works
 
@@ -39,7 +40,9 @@ tested, built and deployed by `.github/workflows/pages.yml`).
   `terraform.js` plan/apply/state/backends, `tfproviders.js`), Ansible (`ansible.js`), observability (`obs.js`: traffic-driven app metrics, node_exporter,
   Prometheus scraping/rules/alerts, Alertmanager into a team chat, LogQL logs, traces;
   `promql.js` the query engine), reliability tools (`reliability.js`: `ab` load tests, an
-  `incident` CLI with a status page, `pg_dump`) and a
+  `incident` CLI with a status page, `pg_dump`), security tools (`security.js`: gitleaks,
+  semgrep, trivy, syft, OWASP ZAP baseline/full scans, lynis, cosign, all of which inspect the
+  simulated world so a finding only goes away when the problem is fixed) and a
   simulated AI assistant (`ai`) whose scripted answers are sometimes wrong on purpose.
 - `js/content/rNN-*.js` defines each realm's labs (setup, tasks with checks and reference
   solutions) and quizzes; `content/<realm>/<lesson>.md` holds the lesson text.

@@ -97,6 +97,14 @@ export const CATALOG = {
   nano: { version: '7.2-2build1', size: '284 kB', bins: ['nano'] },
   'openssh-server': { version: '1:9.6p1-3ubuntu13.5', size: '510 kB', bins: ['sshd'] },
   cron: { version: '3.0pl1-184ubuntu2', size: '85.0 kB', bins: ['crontab'] },
+  lynis: { version: '3.0.9-1', size: '1,602 kB', bins: ['lynis'] },
+  gitleaks: { version: '8.21.2', size: '22.1 MB', bins: ['gitleaks'] },
+  trivy: { version: '0.56.2', size: '146 MB', bins: ['trivy'] },
+  semgrep: { version: '1.95.0', size: '112 MB', bins: ['semgrep'] },
+  syft: { version: '1.16.0', size: '74.0 MB', bins: ['syft'] },
+  cosign: { version: '2.4.1', size: '109 MB', bins: ['cosign'] },
+  zaproxy: { version: '2.15.0', size: '212 MB', bins: ['zap-baseline.py', 'zap-full-scan.py'] },
+  'unattended-upgrades': { version: '2.9.1+nmu4ubuntu1', size: '51.1 kB', bins: [] },
 };
 
 // commands that only exist once their package is installed

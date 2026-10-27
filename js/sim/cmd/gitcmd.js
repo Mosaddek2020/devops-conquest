@@ -5,8 +5,24 @@ import { runGit } from '../../git/git.js';
 import { runGh } from '../../git/github.js';
 import { GitError, C } from '../../git/world.js';
 
+// hook scripts written to <repo>/.git/hooks/<name> (made executable with chmod +x) run like real git hooks
+function syncHooks(host, repo) {
+  if (!repo) return;
+  const pre = repo.root + '/.git/hooks/';
+  repo.hookExec = repo.hookExec || {};
+  for (const [p, text] of host.files) {
+    if (!p.startsWith(pre) || p.slice(pre.length).includes('/')) continue;
+    const name = p.slice(pre.length);
+    repo.hooks[name] = text;
+    repo.hookExec[name] = !!((host.stat(p)?.mode ?? 0) & 0o111);
+    (repo.fileHooks = repo.fileHooks || new Set()).add(name);
+  }
+  for (const name of repo.fileHooks || []) if (!host.files.has(pre + name)) { delete repo.hooks[name]; delete repo.hookExec[name]; repo.fileHooks.delete(name); }
+}
+
 function gitCtx(c, out) {
   const host = c.host;
+  syncHooks(host, host.findRepo(c.cwd));
   const ctx = {
     world: host, cwd: c.cwd, repo: host.findRepo(c.cwd), out, stdin: c.stdin,
     openEditor(req) {

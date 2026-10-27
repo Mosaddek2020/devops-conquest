@@ -9,13 +9,17 @@ import { stripAnsi } from '../git/world.js';
 
 let runnerSeq = 0;
 
+// marketplace actions other modules teach the runner: ACTIONS['owner/name'] = ({ h, ws, w, job, run, world, flat, uni, shell }) => ok
+export const ACTIONS = {};
+
 export function installRunner(uni, addServer) {
   uni.realRunner = ({ world, bare, run, job, flat, base, interpolate, evalExpr, truthy }) => {
     const def = job.def;
     const name = `runner-${++runnerSeq}`;
     const h = addServer(uni, name, { user: 'runner', ip: `10.9.${Math.floor(runnerSeq / 250)}.${runnerSeq % 250 + 2}` });
     h.hidden = true;
-    for (const p of ['git', 'nodejs', 'npm', 'jq']) installPkg(h, uni, p, []);
+    for (const p of ['git', 'nodejs', 'npm', 'jq', 'python3-pip']) installPkg(h, uni, p, []);
+    h.pipSystemOk = true; // hosted runner images let pip install into the system Python
     if (uni.dockerInstall) installPkg(h, uni, 'docker.io', []);
     const repoName = bare.meta.name;
     const ws = `/home/runner/work/${repoName}/${repoName}`;
@@ -58,6 +62,20 @@ export function installRunner(uni, addServer) {
             const dest = w.path ? (w.path.startsWith('/') ? w.path : `${ws}/${w.path}`) : ws;
             for (const [p, c] of Object.entries(files)) h.writeFile(`${dest}/${p}`, c, 'runner');
             job.log.push(`  Downloaded artifact "${nm}" to ${dest}`);
+          } else if (ACTIONS[action]) {
+            // run a command on the runner the way an action's entrypoint would
+            const shell = (cmd, env = {}) => {
+              const sh = new Session(uni, h, { user: 'runner', cwd: ws });
+              sh.advancePerCommand = 0;
+              for (const [k, v] of Object.entries(env)) sh.setVar(sh.e, k, v, { exported: true });
+              sh.e.interactive = false;
+              const chunks = [];
+              const code = sh.runScript(cmd, sh.e, { in: null, out: x => chunks.push(x), err: x => chunks.push(x) }, { name: 'action', result: { editor: null } });
+              const text = stripAnsi(chunks.join('')).replace(/\n$/, '');
+              if (text) job.log.push(...text.split('\n').map(l => '  ' + l));
+              return code;
+            };
+            if (!ACTIONS[action]({ h, ws, w, job, run, world, flat, uni, shell })) { ok = false; break; }
           } else job.log.push('  (action simulated)');
           continue;
         }

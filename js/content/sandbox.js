@@ -1,4 +1,5 @@
 import { relWorld } from './r10-reliability.js';
+import devsecops from './r11-devsecops.js';
 
 // Sandbox starting points. Later simulators add more (containers, clusters, cloud).
 
@@ -102,5 +103,20 @@ export const SCENARIOS = {
     note: 'nginx on lb balancing web1 and web2, PostgreSQL with 100 orders on db1 and an S3 bucket for backups. Try: ab -n 200 -c 10 http://shop.lumen.dev/, stop the shop on one server, incident declare --sev 3 --title "game day", ssh ubuntu@db1 then sudo -u postgres pg_dump shop -f /var/backups/shop.sql',
     setup(H) { relWorld(H, { db: true, orders: 100, cloud: true }); },
     panels: ['network', 'system'],
+  },
+  secure: {
+    title: 'Security workbench',
+    note: 'web1 runs the shop site with nginx and an exposed Redis, and every scanner is on your laptop. Try: ssh ubuntu@web1 sudo lynis audit system, zap-baseline.py -t http://shop.lumen.dev/, trivy config ~/infra, gitleaks dir ~, semgrep scan --config auto ~/infra.',
+    setup(H) {
+      const lab = name => devsecops.lessons.find(l => l.id === name).lab;
+      lab('threat-modeling').setup(H);
+      for (const p of ['/var/www/shop/index.html', '/var/www/shop/about.html', '/var/www/shop/.env']) H.write('web1', p, p.endsWith('.env') ? 'DB_PASSWORD=Shop-db-2026!\n' : '<!doctype html>\n<h1>Lumen shop</h1>\n<a href="/about.html">About</a>\n');
+      H.write('web1', '/etc/nginx/sites-enabled/default', 'server {\n    listen 80;\n    server_name shop.lumen.dev web1;\n    root /var/www/shop;\n    index index.html;\n}\n');
+      H.dns('shop.lumen.dev', 'web1');
+      H.run('sudo systemctl reload nginx', { on: 'web1' });
+      lab('misconfig').setup(H);
+      H.install('laptop', 'gitleaks', 'semgrep', 'syft', 'cosign', 'zaproxy');
+    },
+    panels: ['network', 'files'],
   },
 };

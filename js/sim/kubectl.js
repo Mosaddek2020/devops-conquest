@@ -546,6 +546,7 @@ def('kubectl', c => {
         if (dry) { const v = cl.validate({ ...clone(d), metadata: { namespace: ns, ...d.metadata } }); if (v) { c.eprint(v); code = 1; } else out(`${resName(d)} ${cl.get(d.kind, d.metadata.namespace || ns, d.metadata.name) ? 'configured' : 'created'} (dry run)`); continue; }
         const res = cl.apply(d, { ns });
         if (res.error) { c.eprint(res.error); code = 1; continue; }
+        for (const w of res.warnings || []) c.eprint(w);
         out(`${resName(res.obj)} ${res.verb}`);
       }
       uni.advance(1);

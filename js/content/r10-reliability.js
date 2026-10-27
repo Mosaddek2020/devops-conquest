@@ -38,7 +38,7 @@ export function relWorld(H, { lb = UPSTREAM, db = false, orders = 0, cloud = fal
 const ordersCount = t => { const r = t.exec('db1', 'sudo -u postgres psql -c "SELECT count(*) FROM orders"', { user: 'ubuntu' }); const m = r.out.match(/^\s+(\d+)\s*$/m); return m ? Number(m[1]) : -1; };
 const loads = t => t.events('loadtest').filter(e => /shop\.lumen\.dev/.test(e.url));
 const clean = e => !!e && e.failed === 0 && e.non2xx === 0 && e.n >= 50;
-const inc = t => (t.uni.incidents?.list || []).slice(-1)[0] || null;
+export const inc = t => (t.uni.incidents?.list || []).slice(-1)[0] || null;
 const file = (t, p) => t.file('laptop', p) || '';
 const servedBy = t => { const seen = new Set(); for (let i = 0; i < 4; i++) { const r = t.http('laptop', 'http://shop.lumen.dev/'); const m = String(r.body || '').match(/served by (\w+)/); if (m) seen.add(m[1]); } return seen; };
 
@@ -47,7 +47,7 @@ const PM_GOOD = ['# Postmortem: INC-37 shop outage', '', '## Summary', 'From 19:
 const RUNBOOK = ['#!/usr/bin/env bash', '# Rolling restart of the shop: one server at a time, wait for health before moving on.', 'set -euo pipefail', '', 'DRY=0', '[[ "${1:-}" == "--dry-run" ]] && DRY=1', '', 'for host in web1 web2; do', '  echo "restarting shop on $host"', '  if (( DRY )); then continue; fi', '  ssh "ubuntu@$host" sudo systemctl restart shop', '  for i in $(seq 1 30); do', '    if curl -sf "http://$host:3000/health" >/dev/null; then break; fi', '    if [[ $i == 30 ]]; then echo "$host did not become healthy" >&2; exit 1; fi', '    sleep 1', '  done', '  echo "$host healthy"', 'done', 'echo "rolling restart complete"', ''].join('\n');
 const BACKUP_SH = ['#!/usr/bin/env bash', 'set -euo pipefail', 'f=/var/backups/shop-$(date +%F).sql', 'sudo -u postgres pg_dump shop -f "$f"', 'aws s3 cp "$f" s3://lumen-backups/db1/', ''].join('\n');
 const POSTMORTEM_SECTIONS = ['summary', 'impact', 'timeline', 'contributing factors', 'action items'];
-const pmOk = (text, { mustMention = [] } = {}) => {
+export const pmOk = (text, { mustMention = [] } = {}) => {
   const t = String(text);
   const has = POSTMORTEM_SECTIONS.every(s => new RegExp(`^#+\\s*${s}`, 'im').test(t));
   const blame = /careless|human error|fault|should be more careful|stupid|negligen/i.test(t);

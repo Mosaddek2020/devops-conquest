@@ -2,6 +2,7 @@
 // kill), running programs from the shell (node, python3, npm, nginx…), npm/pip installs,
 // and ssh/scp/ssh-keygen between hosts.
 
+import { sshdConfig } from '../sshdconf.js';
 import { def, opts, registry, commandAvailable } from '../registry.js';
 import { fsx, normPath, dirname, basename, humanSize } from '../fsx.js';
 import { SimError } from '../host.js';
@@ -12,6 +13,7 @@ import { simulateRun } from '../../git/actions.js';
 import { C } from '../../git/world.js';
 import { fmtDate, lsTime } from './core.js';
 import { connect } from '../net.js';
+import { installPkg } from '../packages.js';
 
 // ---------- editors ----------
 def(['nano', 'vim', 'vi', 'code', 'edit', 'emacs', 'pico', 'gedit', 'subl'], c => {
@@ -368,8 +370,8 @@ def(['pip', 'pip3'], c => {
   const [sub, ...rest] = c.args;
   if (sub === 'install') {
     const pkgs = rest.includes('-r') ? (c.host.files.get(c.resolve(rest[rest.indexOf('-r') + 1])) || '').split('\n').map(l => l.trim()).filter(Boolean) : rest.filter(a => !a.startsWith('-'));
-    if (!c.env.VIRTUAL_ENV && c.user !== 'root' && !rest.includes('--user') && !rest.includes('--break-system-packages')) return c.fail(`error: externally-managed-environment\n\n× This environment is externally managed\n╰─> To install Python packages system-wide, try apt install\n    python3-xyz, where xyz is the package you are trying to\n    install.\n\n    If you wish to install a non-Debian-packaged Python package,\n    create a virtual environment using python3 -m venv path/to/venv.`, 1);
-    for (const p of pkgs) { c.print(`Collecting ${p.split(/[=<>]/)[0]}`, `  Downloading ${p.split(/[=<>]/)[0]}-3.0.3-py3-none-any.whl (101 kB)`); if (/flask/i.test(p)) c.host.flaskInstalled = true; }
+    if (!c.env.VIRTUAL_ENV && c.user !== 'root' && !c.host.pipSystemOk && !rest.includes('--user') && !rest.includes('--break-system-packages')) return c.fail(`error: externally-managed-environment\n\n× This environment is externally managed\n╰─> To install Python packages system-wide, try apt install\n    python3-xyz, where xyz is the package you are trying to\n    install.\n\n    If you wish to install a non-Debian-packaged Python package,\n    create a virtual environment using python3 -m venv path/to/venv.`, 1);
+    for (const p of pkgs) { c.print(`Collecting ${p.split(/[=<>]/)[0]}`, `  Downloading ${p.split(/[=<>]/)[0]}-3.0.3-py3-none-any.whl (101 kB)`); if (/flask/i.test(p)) c.host.flaskInstalled = true; if (/^semgrep\b/.test(p)) installPkg(c.host, c.uni, 'semgrep', []); }
     c.print(`Successfully installed ${pkgs.map(p => p.split(/[=<>]/)[0] + '-3.0.3').join(' ')}`);
     return 0;
   }
@@ -592,6 +594,13 @@ def('ssh', c => {
   }
   if (target === c.host && hostName !== 'localhost') { /* fine */ }
   if (!target.users.has(tuser)) return c.fail(`${tuser}@${hostName}: Permission denied (publickey).`, 255);
+  const sshd = sshdConfig(target).cfg;
+  const allow = sshd.allowusers ? sshd.allowusers.split(/\s+/) : null;
+  if ((tuser === 'root' && sshd.permitrootlogin === 'no') || (allow && !allow.includes(tuser))) {
+    target.log('ssh.service', `${tuser === 'root' && sshd.permitrootlogin === 'no' ? 'ROOT LOGIN REFUSED' : `User ${tuser} not allowed because not listed in AllowUsers`} from ${c.host.ip} port 51234 ssh2`);
+    c.uni.emit({ type: 'ssh-denied', from: c.host.name, to: target.name, user: tuser });
+    return c.fail(`${tuser}@${hostName}: Permission denied (publickey).`, 255);
+  }
   if (!sshAuth(c, target, tuser, identity)) {
     c.uni.emit({ type: 'ssh-denied', from: c.host.name, to: target.name, user: tuser });
     target.log('ssh.service', `Connection closed by authenticating user ${tuser} ${c.host.ip} port 51234 [preauth]`);

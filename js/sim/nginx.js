@@ -91,10 +91,13 @@ export function loadConfig(host, path = '/etc/nginx/nginx.conf') {
   const user = (tree.find(d => d.name === 'user')?.args[0] || 'www-data').replace(/;$/, '');
   const servers = [];
   const upstreams = {};
+  // server_tokens and add_header set in http {} apply to servers that do not set their own
+  const httpTokens = http?.block.find(x => x.name === 'server_tokens')?.args[0] !== 'off';
+  const httpHeaders = (http?.block || []).filter(x => x.name === 'add_header').map(x => [x.args[0], x.args[1]]);
   for (const d of http?.block || []) {
     if (d.name === 'upstream') { const list = d.block.filter(x => x.name === 'server'); upstreams[d.args[0]] = list.filter(x => !x.args.includes('backup') && !x.args.includes('down')).map(x => x.args[0]); upstreams[d.args[0]].backup = list.filter(x => x.args.includes('backup')).map(x => x.args[0]); }
     if (d.name !== 'server') continue;
-    const srv = { listens: [], names: [], root: null, index: ['index.html'], locations: [], headers: [], returns: null, file: d.file, line: d.line, certs: {} };
+    const srv = { listens: [], names: [], root: null, index: ['index.html'], locations: [], headers: [], returns: null, file: d.file, line: d.line, certs: {}, tokens: httpTokens };
     for (const x of d.block) {
       switch (x.name) {
         case 'listen': {
@@ -111,11 +114,13 @@ export function loadConfig(host, path = '/etc/nginx/nginx.conf') {
         case 'location': srv.locations.push(parseLocation(x)); break;
         case 'return': srv.returns = x.args; break;
         case 'add_header': srv.headers.push([x.args[0], x.args[1]]); break;
+        case 'server_tokens': srv.tokens = x.args[0] !== 'off'; break;
         case 'ssl_certificate': srv.certs.cert = x.args[0]; srv.certLine = x; break;
         case 'ssl_certificate_key': srv.certs.key = x.args[0]; break;
         case 'try_files': srv.tryFiles = x.args; break;
       }
     }
+    if (!srv.headers.length) srv.headers.push(...httpHeaders);
     if (!srv.listens.length) srv.listens.push({ port: 80, ssl: false, def: false, addr: '0.0.0.0' });
     if (srv.listens.some(l => l.ssl)) {
       if (!srv.certs.cert) throw new NginxConfigError(`no "ssl_certificate" is defined for the "listen ... ssl" directive`, d.file, d.line);
@@ -198,6 +203,12 @@ export class Nginx {
   }
   route(req) {
     const srv = this.pickServer(req.port, req.headers.host);
+    const r = this.route0(req, srv);
+    // the Server header carries the version unless server_tokens is off
+    r.headers = { ...(r.headers || {}), server: srv && !srv.tokens ? 'nginx' : 'nginx/1.24.0 (Ubuntu)' };
+    return r;
+  }
+  route0(req, srv) {
     if (!srv) return { status: 404, body: ERR(404, 'Not Found') };
     const subst = s => s.replace(/\$host/g, String(req.headers.host).split(':')[0]).replace(/\$request_uri/g, req.path + (req.query || '')).replace(/\$uri/g, req.path).replace(/\$scheme/g, req.scheme).replace(/\$server_name/g, srv.names[0] || '');
     const headers = Object.fromEntries(srv.headers.map(([k, v]) => [k.toLowerCase(), v]));
@@ -276,7 +287,7 @@ export class Nginx {
       const url = `${scheme}://${up}${rest || '/'}${req.query || ''}`;
       if (req.depth > 4) return { status: 508, headers, body: ERR(508, 'Loop Detected') };
       const r = httpRequest(this.uni, this.host, url, { method: req.method, headers: { ...req.headers, 'x-forwarded-for': req.fromIp }, body: req.body, depth: (req.depth || 0) + 1 });
-      if (!r.error) return { status: r.status, headers: { ...r.headers, ...headers, server: 'nginx/1.24.0 (Ubuntu)', 'x-upstream': up }, body: r.body };
+      if (!r.error) return { status: r.status, headers: { ...r.headers, ...headers, 'x-upstream': up }, body: r.body };
       const why = r.error === 'ECONNREFUSED' ? '111: Connection refused' : r.error === 'ETIMEDOUT' ? '110: Connection timed out' : r.error === 'ENOTFOUND' ? `host not found in upstream "${up}"` : r.error;
       this.errlog(`connect() failed (${why}) while connecting to upstream, client: ${req.fromIp}, server: _, request: "${req.method} ${req.path} HTTP/1.1", upstream: "${url}"`);
       if (upstreamHosts.length === 1 && !upstreamHosts.multi) return r.error === 'ETIMEDOUT' ? { status: 504, headers, body: ERR(504, 'Gateway Time-out') } : { status: 502, headers, body: ERR(502, 'Bad Gateway') };

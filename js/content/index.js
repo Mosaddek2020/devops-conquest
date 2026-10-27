@@ -10,5 +10,6 @@ import kubernetes from './r07-kubernetes.js';
 import iac from './r08-iac.js';
 import observability from './r09-observability.js';
 import reliability from './r10-reliability.js';
+import devsecops from './r11-devsecops.js';
 
-export const realms = [basecamp, linux, network, services, scripting, cicd, containers, kubernetes, iac, observability, reliability];
+export const realms = [basecamp, linux, network, services, scripting, cicd, containers, kubernetes, iac, observability, reliability, devsecops];

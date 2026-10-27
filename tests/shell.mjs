@@ -98,5 +98,7 @@ t('f() { return 3; }; f; echo $?', '3');
 t('x=$(nosuch 2>&1); echo "[$x]"', '[nosuch: command not found]');
 t("printf 'echo ran > out.txt\\n' > s.sh; bash -n s.sh; echo code=$?; ls out.txt 2>&1 | head -c 2", 'code=0\nls');
 t("printf 'if true; then\\necho x\\n' > s.sh; bash -n s.sh; echo code=$?", /syntax error[\s\S]*code=2/);
+t('ss -tln > /dev/null; echo $?', '0');
+t("mkdir r && cd r && git init -q && printf '#!/bin/sh\\necho hook-ran; exit 1\\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && touch a && git add a && git commit -qm x; echo code=$?; git status --short", /hook-ran[\s\S]*code=1[\s\S]*A  a/);
 console.log(`\n${n - fails}/${n} shell checks pass`);
 process.exit(fails ? 1 : 0);

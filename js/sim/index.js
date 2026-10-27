@@ -18,6 +18,7 @@ import './ansible.js';
 import './obs.js';
 import './obs-lab.js';
 import './reliability.js';
+import './security.js';
 import './iac-lab.js';
 import { wirePackages } from './packages.js';
 import { installSystemdTicker } from './systemd.js';

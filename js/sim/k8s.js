@@ -139,12 +139,20 @@ export class Cluster {
     if (!CLUSTER_SCOPED.has(obj.kind) && !this.get('Namespace', null, obj.metadata.namespace)) return { error: `Error from server (NotFound): error when creating "${input.__file || '-'}": namespaces "${obj.metadata.namespace}" not found` };
     const invalid = this.validate(obj);
     if (invalid) return { error: invalid };
+    // Pod Security Admission: pods are refused, workloads only warned about (their pods are refused later)
+    const warnings = [];
+    const tplSpec = obj.kind === 'Pod' ? obj.spec : ['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job'].includes(obj.kind) ? obj.spec?.template?.spec : null;
+    if (tplSpec) {
+      const psa = this.podSecurity(obj.metadata.namespace, tplSpec);
+      if (psa && obj.kind === 'Pod' && psa.mode === 'enforce') return { error: `Error from server (Forbidden): error when creating "${input.__file || '-'}": pods "${obj.metadata.name}" is forbidden: ${psa.text}` };
+      if (psa) warnings.push(`Warning: would violate ${psa.text.replace(/^violates /, '')}`);
+    }
     const cur = this.get(obj.kind, obj.metadata.namespace, obj.metadata.name);
     if (!cur) {
       this.defaults(obj);
       this.put(obj);
       this.onCreate(obj);
-      return { verb: 'created', obj };
+      return { verb: 'created', obj, warnings };
     }
     // three-way merge, simplified: the applied fields replace the live ones
     if (obj.kind === 'Deployment' && JSON.stringify(cur.spec.selector) !== JSON.stringify(obj.spec.selector)) return { error: `The Deployment "${obj.metadata.name}" is invalid: spec.selector: Invalid value: v1.LabelSelector{MatchLabels:map[string]string{${Object.entries(obj.spec.selector?.matchLabels || {}).map(([k, v]) => `"${k}":"${v}"`).join(', ')}}}: field is immutable` };
@@ -155,11 +163,39 @@ export class Cluster {
     cur.metadata.labels = obj.metadata.labels || {};
     cur.metadata.annotations = { ...(obj.metadata.annotations || {}), ...Object.fromEntries(Object.entries(cur.metadata.annotations || {}).filter(([k]) => k.startsWith('deployment.kubernetes.io/'))) };
     const after = JSON.stringify([cur.spec, cur.data, cur.stringData, cur.metadata.labels, cur.metadata.annotations]);
-    if (before === after) return { verb: 'unchanged', obj: cur };
+    if (before === after) return { verb: 'unchanged', obj: cur, warnings };
     cur.metadata.generation++;
     if (cur.kind === 'Secret' && cur.stringData) { cur.data = { ...(cur.data || {}), ...Object.fromEntries(Object.entries(cur.stringData).map(([k, v]) => [k, btoa(String(v))])) }; delete cur.stringData; }
     this.onUpdate(cur);
-    return { verb: 'configured', obj: cur };
+    return { verb: 'configured', obj: cur, warnings };
+  }
+
+  // the Pod Security Standards a namespace enforces (or warns about), and how a pod spec breaks them
+  podSecurity(ns, spec) {
+    const labels = this.get('Namespace', null, ns)?.metadata.labels || {};
+    const enforce = labels['pod-security.kubernetes.io/enforce'], warn = labels['pod-security.kubernetes.io/warn'];
+    const level = enforce || warn;
+    if (!level || level === 'privileged') return null;
+    const v = [];
+    const cs = [...(spec.initContainers || []), ...(spec.containers || [])];
+    const psc = spec.securityContext || {};
+    const priv = cs.filter(c => c.securityContext?.privileged);
+    if (priv.length) v.push(`privileged (${priv.map(c => `container "${c.name}"`).join(', ')} must not set securityContext.privileged=true)`);
+    const hp = (spec.volumes || []).filter(x => x.hostPath);
+    if (hp.length) v.push(`restricted volume types (${hp.map(x => `volume "${x.name}"`).join(', ')} uses restricted volume type "hostPath")`);
+    if (spec.hostNetwork) v.push('host namespaces (hostNetwork=true)');
+    if (level === 'restricted') {
+      const ape = cs.filter(c => c.securityContext?.allowPrivilegeEscalation !== false);
+      if (ape.length) v.push(`allowPrivilegeEscalation != false (${ape.map(c => `container "${c.name}"`).join(', ')} must set securityContext.allowPrivilegeEscalation=false)`);
+      const caps = cs.filter(c => !(c.securityContext?.capabilities?.drop || []).map(String).includes('ALL'));
+      if (caps.length) v.push(`unrestricted capabilities (${caps.map(c => `container "${c.name}"`).join(', ')} must set securityContext.capabilities.drop=["ALL"])`);
+      const root = psc.runAsNonRoot === true ? cs.filter(c => c.securityContext?.runAsNonRoot === false) : cs.filter(c => c.securityContext?.runAsNonRoot !== true);
+      if (root.length) v.push(`runAsNonRoot != true (pod or ${root.map(c => `container "${c.name}"`).join(', ')} must set securityContext.runAsNonRoot=true)`);
+      const sc = cs.filter(c => !['RuntimeDefault', 'Localhost'].includes(c.securityContext?.seccompProfile?.type || psc.seccompProfile?.type));
+      if (sc.length) v.push(`seccompProfile (pod or ${sc.map(c => `container "${c.name}"`).join(', ')} must set securityContext.seccompProfile.type to "RuntimeDefault" or "Localhost")`);
+    }
+    if (!v.length) return null;
+    return { mode: enforce && enforce !== 'privileged' ? 'enforce' : 'warn', level, text: `violates PodSecurity "${level}:latest": ${v.join(', ')}` };
   }
 
   validate(o) {
@@ -327,11 +363,15 @@ export class Cluster {
         // scale up the new set within the surge budget
         const room = want + surge - total;
         if (room > 0 && cur.spec.replicas < want) { const to = Math.min(want, cur.spec.replicas + room); this.event(d, 'Normal', 'ScalingReplicaSet', `Scaled up replica set ${cur.metadata.name} from ${cur.spec.replicas} to ${to}`); cur.spec.replicas = to; }
-        // scale down old sets as long as enough pods stay available
+        // old sets' unhealthy replicas (not ready, or never created, e.g. refused by admission)
+        // go first: removing them costs no availability
+        for (const rs of old) {
+          const bad = rs.spec.replicas - this.podsOf(rs).filter(p => this.podReady(p)).length;
+          if (bad > 0) { this.event(d, 'Normal', 'ScalingReplicaSet', `Scaled down replica set ${rs.metadata.name} from ${rs.spec.replicas} to ${rs.spec.replicas - bad}`); rs.spec.replicas -= bad; }
+        }
+        // then scale down old sets as long as enough pods stay available
         const available = rss.reduce((s, rs) => s + this.podsOf(rs).filter(p => this.podReady(p)).length, 0);
-        let canRemove = available - (want - unavail);
-        const notReadyOld = old.reduce((s, rs) => s + this.podsOf(rs).filter(p => !this.podReady(p)).length, 0);
-        canRemove = Math.max(canRemove, 0) + notReadyOld;
+        let canRemove = Math.max(available - (want - unavail), 0);
         for (const rs of old.sort((a, b) => Number(a.metadata.annotations['deployment.kubernetes.io/revision']) - Number(b.metadata.annotations['deployment.kubernetes.io/revision']))) {
           if (canRemove <= 0 || !rs.spec.replicas) continue;
           const by = Math.min(rs.spec.replicas, canRemove);
@@ -373,6 +413,8 @@ export class Cluster {
       for (let i = pods.length; i < want; i++) {
         const tpl = clone(rs.spec.template);
         const name = `${rs.metadata.name}-${suffix()}`;
+        const psa = this.podSecurity(rs.metadata.namespace, tpl.spec || {});
+        if (psa?.mode === 'enforce') { if (!rs.__psaWarned || this.uni.time - rs.__psaWarned > 60) { rs.__psaWarned = this.uni.time; this.event(rs, 'Warning', 'FailedCreate', `Error creating: pods "${name}" is forbidden: ${psa.text}`); } break; }
         const pod = { kind: 'Pod', metadata: { name, namespace: rs.metadata.namespace, labels: tpl.metadata?.labels || {}, annotations: tpl.metadata?.annotations, ownerReferences: [{ apiVersion: 'apps/v1', kind: 'ReplicaSet', name: rs.metadata.name, uid: rs.metadata.uid, controller: true }] }, spec: tpl.spec };
         this.defaults(pod); this.put(pod); this.onCreate(pod);
         this.event(rs, 'Normal', 'SuccessfulCreate', `Created pod: ${name}`);
@@ -611,7 +653,8 @@ export class Cluster {
       } catch (e) { c.state = 'waiting'; c.reason = 'CreateContainerError'; c.message = e.message; return; }
     } else { c.ctr.prepare = prepare; c.ctr.env = { ...c.ctr.env, ...envR.env }; c.ctr.status = 'created'; }
     c.pvcMounts = pvcMounts;
-    if (spec.securityContext?.runAsNonRoot && ['root', '0'].includes(String(c.ctr.user)) && spec.securityContext?.runAsUser === undefined) {
+    const sc = { ...(p.spec?.securityContext || {}), ...(spec.securityContext || {}) };
+    if (sc.runAsNonRoot && (['root', '0'].includes(String(c.ctr.user)) ? sc.runAsUser === undefined || Number(sc.runAsUser) === 0 : Number(sc.runAsUser) === 0)) {
       c.state = 'waiting'; c.reason = 'CreateContainerConfigError'; c.message = 'container has runAsNonRoot and image will run as root';
       this.event(p, 'Warning', 'Failed', `Error: ${c.message}`); c.nextTry = this.uni.time + 10; return;
     }

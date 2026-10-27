@@ -6,7 +6,7 @@ export const registry = Object.create(null);
 export const meta = Object.create(null);
 
 export function def(names, fn, opts = {}) {
-  for (const n of [].concat(names)) { registry[n] = fn; meta[n] = opts; }
+  for (const n of [].concat(names)) { registry[n] = fn; meta[n] = { ...opts }; }
 }
 
 export function commandAvailable(host, name) {

@@ -9,6 +9,7 @@ import { C } from '../git/world.js';
 import { ipMatches } from './net.js';
 import { Session } from './session.js';
 import { SimError } from './host.js';
+import { dirname } from './fsx.js';
 
 const hex = (n, seed) => { let h = 0x811c9dc5 ^ seed; let s = ''; for (let i = 0; i < n; i++) { h ^= h << 13; h >>>= 0; h ^= h >>> 17; h ^= h << 5; h >>>= 0; s += (h & 15).toString(16); } return s; };
 const INSTANCE_TYPES = { 't3.nano': [512, 2], 't3.micro': [1024, 2], 't3.small': [2048, 2], 't3.medium': [4096, 2], 't3.large': [8192, 2], 'm5.large': [8192, 2], 'm5.xlarge': [16384, 4] };
@@ -30,6 +31,16 @@ export class Cloud {
     this.defaultSg = this.put('aws_security_group', { name: 'default', description: 'default VPC security group', vpc_id: vpc.id, ingress: [], egress: [{ from_port: 0, to_port: 0, protocol: '-1', cidr_blocks: ['0.0.0.0/0'] }], tags: {} }).id;
     uni.cloudFilter = (from, to, port) => this.allows(from, to, port);
   }
+
+  // IAM users and access keys. Off by default: once a lab enables it, the CLI rejects keys that
+  // are deactivated, deleted or unknown, and every call lands in the CloudTrail event history.
+  enableIam(users) {
+    this.iam = { users: new Map() };
+    this.trail = this.trail || [];
+    for (const [name, keys] of Object.entries(users)) this.iam.users.set(name, { name, created: this.uni.time - 86400 * 400, keys: keys.map(k => ({ id: k.id, secret: k.secret, status: k.status || 'Active', created: k.created ?? this.uni.time - 86400 * 200, lastUsed: null })) });
+  }
+  iamKey(id) { for (const u of this.iam?.users.values() || []) { const k = u.keys.find(x => x.id === id); if (k) return { ...k, ref: k, user: u.name }; } return null; }
+  trailEvent(e) { (this.trail = this.trail || []).push({ id: `${hex(8, this.seq++)}-${hex(4, this.seq)}-4${hex(3, this.seq)}-a${hex(3, this.seq + 1)}-${hex(12, this.seq + 2)}`, time: this.uni.time, region: this.region, ...e }); }
 
   table(type) { if (!this.res.has(type)) this.res.set(type, new Map()); return this.res.get(type); }
   all(type) { return [...this.table(type).values()]; }
@@ -148,7 +159,7 @@ function jmes(obj, q) {
   const expr = q.replace(/^['"]|['"]$/g, '');
   const steps = expr.split('.').flatMap(p => { const m = p.match(/^([^[]*)((\[[^\]]*\])*)$/); return m ? [m[1], ...(m[2].match(/\[[^\]]*\]/g) || [])].filter(Boolean) : [p]; });
   let cur = obj, projected = false;
-  const apply = (v, s) => { if (s === '[]' || s === '[*]') return { flat: true, v: Array.isArray(v) ? v : [] }; const n = s.match(/^\[(-?\d+)\]$/); if (n) return { v: Array.isArray(v) ? v.at(Number(n[1])) : undefined }; const f = s.match(/^\[\?(\w+)\s*==\s*[`']([^`']*)[`']\]$/); if (f) return { flat: true, v: (Array.isArray(v) ? v : []).filter(x => String(x?.[f[1]]) === f[2]) }; return { v: v?.[s] }; };
+  const apply = (v, s) => { if (s === '[]' || s === '[*]') return { flat: true, v: Array.isArray(v) ? v : [] }; const ms = s.match(/^\[([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)+)\]$/); if (ms) return { v: v == null ? undefined : ms[1].split(',').map(f => jmes(v, f.trim())) }; const n = s.match(/^\[(-?\d+)\]$/); if (n) return { v: Array.isArray(v) ? v.at(Number(n[1])) : undefined }; const f = s.match(/^\[\?(\w+)\s*==\s*[`']([^`']*)[`']\]$/); if (f) return { flat: true, v: (Array.isArray(v) ? v : []).filter(x => String(x?.[f[1]]) === f[2]) }; return { v: v?.[s] }; };
   for (const s of steps) {
     if (projected) { const out = []; for (const item of cur) { const r = apply(item, s); if (r.flat) out.push(...r.v); else if (r.v !== undefined) out.push(r.v); } cur = out; }
     else { const r = apply(cur, s); cur = r.v; if (r.flat) projected = true; }
@@ -157,7 +168,7 @@ function jmes(obj, q) {
 }
 const tagList = tags => Object.entries(tags || {}).map(([Key, Value]) => ({ Key, Value }));
 function printOut(c, data, output) {
-  if (output === 'text') { const flat = v => Array.isArray(v) ? v.map(flat).join('\t') : v && typeof v === 'object' ? Object.values(v).map(flat).join('\t') : String(v ?? 'None'); c.print(flat(data)); return; }
+  if (output === 'text') { const flat = v => Array.isArray(v) ? v.map(flat).join('\t') : v && typeof v === 'object' ? Object.values(v).map(flat).join('\t') : String(v ?? 'None'); c.print(Array.isArray(data) && data.some(Array.isArray) ? data.map(flat).join('\n') : flat(data)); return; }
   if (output === 'table') { c.print(JSON.stringify(data, null, 2)); return; }
   c.print(...JSON.stringify(data ?? null, null, 4).split('\n'));
 }
@@ -172,11 +183,24 @@ def('aws', c => {
   }
   const [svc, op, ...rest] = pos;
   const cloud = c.uni.cloud;
-  if (!svc || svc === 'help') { c.print('usage: aws [options] <command> <subcommand> [parameters]', '', 'Commands: ec2, s3, route53, sts, configure'); return 0; }
+  if (!svc || svc === 'help') { c.print('usage: aws [options] <command> <subcommand> [parameters]', '', 'Commands: ec2, s3, route53, sts, iam, cloudtrail, configure'); return 0; }
   if (svc === '--version' || flags.version) { c.print('aws-cli/2.18.12 Python/3.12.6 Linux/6.8.0 exe/x86_64.ubuntu.24'); return 0; }
   const credFile = `${c.host.users.get(c.user)?.home}/.aws/credentials`;
   const hasCreds = c.host.files.has(credFile) || (c.env.AWS_ACCESS_KEY_ID && c.env.AWS_SECRET_ACCESS_KEY);
   if (svc === 'configure') {
+    if (op === 'set' || op === 'get') {
+      const key = rest[0];
+      const file = /region|output/.test(key || '') ? credFile.replace(/credentials$/, 'config') : credFile;
+      const text = c.host.files.get(file) || '';
+      if (op === 'get') { const m = text.match(new RegExp(`^${key}\\s*=\\s*(\\S+)`, 'm')); if (!m) return 1; c.print(m[1]); return 0; }
+      if (!key || rest[1] === undefined) return c.fail('usage: aws configure set varname value', 252);
+      const line = `${key} = ${rest[1]}`;
+      const next = new RegExp(`^${key}\\s*=.*$`, 'm').test(text) ? text.replace(new RegExp(`^${key}\\s*=.*$`, 'm'), line) : (text.includes('[default]') ? text.replace('[default]\n', `[default]\n${line}\n`) : `[default]\n${line}\n${text}`);
+      c.host.mkdirMeta(dirname(file), c.user, 0o700);
+      c.host.writeFile(file, next, c.user);
+      if (/credentials$/.test(file)) c.host.setMeta(file, { mode: 0o600 });
+      return 0;
+    }
     if (op === 'list') { c.print('      Name                    Value             Type    Location', '      ----                    -----             ----    --------', `   profile                <not set>             None    None`, `access_key     ${hasCreds ? '****************QX7A shared-credentials-file' : '<not set>             None    None'}`, `secret_key     ${hasCreds ? '****************h3Kd shared-credentials-file' : '<not set>             None    None'}`, `    region                ${cloud?.region || '<not set>'}      config-file    ~/.aws/config`); return 0; }
     return c.fail('aws configure is interactive; in the lab your credentials are already in ~/.aws/credentials', 1);
   }
@@ -185,12 +209,75 @@ def('aws', c => {
   const out = flags.output || 'json';
   const show = data => { printOut(c, flags.query ? jmes(data, flags.query) : data, out); return 0; };
   const by = 'console';
-  if (svc === 'sts' && op === 'get-caller-identity') return show({ UserId: 'AIDAZ3EXAMPLE7QX7A', Account: cloud.account, Arn: `arn:aws:iam::${cloud.account}:user/dev` });
+  const opName = svc === 's3' ? ({ ls: rest.length ? 'ListObjectsV2' : 'ListBuckets', cp: 'PutObject', mb: 'CreateBucket', rb: 'DeleteBucket', rm: 'DeleteObject' })[op] || 'ListBuckets' : String(op || '').split('-').map(w => w[0]?.toUpperCase() + w.slice(1)).join('');
+  let caller = 'dev';
+  if (cloud.iam) {
+    const keyId = c.env.AWS_ACCESS_KEY_ID || (c.host.files.get(credFile) || '').match(/aws_access_key_id\s*=\s*(\S+)/)?.[1];
+    const k = cloud.iamKey(keyId);
+    if (!k || k.status !== 'Active') return c.fail(`\nAn error occurred (InvalidClientTokenId) when calling the ${opName} operation: The security token included in the request is invalid.`, 254);
+    caller = k.user;
+    k.ref.lastUsed = { time: c.uni.time, service: svc, region: flags.region || cloud.region };
+    cloud.trailEvent({ name: opName, source: `${svc === 's3' ? 's3' : svc}.amazonaws.com`, user: k.user, key: k.id, ip: c.host.publicIp || '198.51.100.23', region: flags.region || cloud.region, readOnly: /^(describe|list|get|lookup|ls)/.test(op || ''), resources: [].concat(flags['instance-ids'] || [], flags['access-key-id'] || []) });
+  }
+  const region = flags.region || cloud.region;
+  const inRegion = i => (i.region || cloud.region) === region;
+  if (svc === 'sts' && op === 'get-caller-identity') return show({ UserId: 'AIDAZ3EXAMPLE7QX7A', Account: cloud.account, Arn: `arn:aws:iam::${cloud.account}:user/${caller}` });
+  if (svc === 'iam' && cloud.iam) {
+    const uname = flags['user-name'] || caller;
+    const u = cloud.iam.users.get(uname);
+    if (!u && op !== 'list-users') return c.fail(`\nAn error occurred (NoSuchEntity) when calling the ${opName} operation: The user with name ${uname} cannot be found.`, 254);
+    const iso = t => new Date(t * 1000).toISOString().replace('.000Z', '+00:00');
+    const findKey = () => { const k = u.keys.find(x => x.id === flags['access-key-id']); if (!k) c.eprint(`\nAn error occurred (NoSuchEntity) when calling the ${opName} operation: The Access Key with id ${flags['access-key-id']} cannot be found.`); return k; };
+    switch (op) {
+      case 'list-users': return show({ Users: [...cloud.iam.users.values()].map(x => ({ Path: '/', UserName: x.name, UserId: 'AIDA' + hex(16, x.name.length * 977).toUpperCase(), Arn: `arn:aws:iam::${cloud.account}:user/${x.name}`, CreateDate: iso(x.created) })) });
+      case 'list-access-keys': return show({ AccessKeyMetadata: u.keys.map(k => ({ UserName: u.name, AccessKeyId: k.id, Status: k.status, CreateDate: iso(k.created) })) });
+      case 'create-access-key': {
+        if (u.keys.length >= 2) return c.fail(`\nAn error occurred (LimitExceeded) when calling the CreateAccessKey operation: Cannot exceed quota for AccessKeysPerUser: 2`, 254);
+        const n = (cloud.keySeq = (cloud.keySeq || 0) + 1);
+        const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        const id = 'AKIA' + Array.from({ length: 16 }, (_, i) => alpha[(n * 131 + i * 17 + u.name.length * 7 + i * i) % 32]).join('');
+        const secret = btoa(`lumen-${u.name}-${n}-${c.uni.time}-secret-key-material`).replace(/[^A-Za-z0-9]/g, '').slice(0, 40);
+        const k = { id, secret, status: 'Active', created: c.uni.time, lastUsed: null };
+        u.keys.push(k);
+        c.uni.emit({ type: 'iam', op: 'create-key', user: u.name, key: id });
+        return show({ AccessKey: { UserName: u.name, AccessKeyId: id, Status: 'Active', SecretAccessKey: secret, CreateDate: iso(k.created) } });
+      }
+      case 'update-access-key': {
+        const k = findKey(); if (!k) return 254;
+        const st = String(flags.status || '');
+        if (!['Active', 'Inactive'].includes(st)) return c.fail(`\nAn error occurred (ValidationError) when calling the UpdateAccessKey operation: 1 validation error detected: Value '${st}' at 'status' failed to satisfy constraint: Member must satisfy enum value set: [Active, Inactive]`, 254);
+        k.status = st;
+        c.uni.emit({ type: 'iam', op: 'update-key', user: u.name, key: k.id, status: st });
+        return 0;
+      }
+      case 'delete-access-key': {
+        const k = findKey(); if (!k) return 254;
+        u.keys = u.keys.filter(x => x !== k);
+        c.uni.emit({ type: 'iam', op: 'delete-key', user: u.name, key: k.id });
+        return 0;
+      }
+      case 'get-access-key-last-used': {
+        const k = cloud.iamKey(flags['access-key-id']);
+        if (!k) return c.fail(`\nAn error occurred (AccessDenied) when calling the GetAccessKeyLastUsed operation: Access key ${flags['access-key-id']} does not exist`, 254);
+        return show({ UserName: k.user, AccessKeyLastUsed: k.lastUsed ? { LastUsedDate: iso(k.lastUsed.time), ServiceName: k.lastUsed.service, Region: k.lastUsed.region } : { ServiceName: 'N/A', Region: 'N/A' } });
+      }
+    }
+    return c.fail(`\naws: error: argument operation: Invalid choice: '${op}'`, 252);
+  }
+  if (svc === 'cloudtrail' && op === 'lookup-events') {
+    let ev = [...(cloud.trail || [])].reverse();
+    const attr = String(flags['lookup-attributes'] || '');
+    const m = attr.match(/AttributeKey=(\w+),AttributeValue=(.+)/);
+    if (m) ev = ev.filter(e => ({ AccessKeyId: e.key, Username: e.user, EventName: e.name, EventSource: e.source, ReadOnly: String(e.readOnly), ResourceName: (e.resources || []).join(' ') })[m[1]]?.includes(m[2]));
+    if (flags['max-results']) ev = ev.slice(0, Number(flags['max-results']));
+    c.uni.emit({ type: 'cloudtrail', filter: attr, count: ev.length });
+    return show({ Events: ev.map(e => ({ EventId: e.id, EventName: e.name, ReadOnly: String(!!e.readOnly), AccessKeyId: e.key, EventTime: new Date(e.time * 1000).toISOString().replace('.000Z', '+00:00'), EventSource: e.source, Username: e.user, Resources: (e.resources || []).map(r => ({ ResourceType: /^i-/.test(r) ? 'AWS::EC2::Instance' : /^AKIA/.test(r) ? 'AWS::IAM::AccessKey' : 'AWS::Resource', ResourceName: r })), CloudTrailEvent: JSON.stringify({ eventVersion: '1.09', userIdentity: { type: 'IAMUser', userName: e.user, accessKeyId: e.key }, eventTime: new Date(e.time * 1000).toISOString(), eventSource: e.source, eventName: e.name, awsRegion: e.region, sourceIPAddress: e.ip, userAgent: e.agent || 'aws-cli/2.18.12' }) })) });
+  }
   if (svc === 'ec2') {
     const ids = [].concat(flags['instance-ids'] || []);
     switch (op) {
       case 'describe-instances': {
-        let list = cloud.all('aws_instance');
+        let list = cloud.all('aws_instance').filter(inRegion);
         if (ids.length) list = list.filter(i => ids.includes(i.id));
         for (const f of [].concat(flags.filters || [])) { const m = String(f).match(/Name=([^,]+),Values=(.+)/); if (!m) continue; const vals = m[2].split(','); list = list.filter(i => m[1].startsWith('tag:') ? vals.includes(i.tags?.[m[1].slice(4)]) : m[1] === 'instance-state-name' ? vals.includes(i.instance_state) : true); }
         return show({ Reservations: list.map(i => ({ ReservationId: 'r-0' + i.id.slice(3), OwnerId: cloud.account, Instances: [{ InstanceId: i.id, ImageId: i.ami, InstanceType: i.instance_type, KeyName: i.key_name, LaunchTime: new Date(i.launched * 1000).toISOString(), State: { Code: 16, Name: i.instance_state }, PrivateIpAddress: i.private_ip, PublicIpAddress: i.public_ip || undefined, PublicDnsName: i.public_dns, SubnetId: i.subnet_id, VpcId: cloud.get('aws_subnet', i.subnet_id)?.vpc_id, SecurityGroups: (i.vpc_security_group_ids || []).map(g => ({ GroupId: g, GroupName: cloud.get('aws_security_group', g)?.name })), Tags: tagList(i.tags) }] })) });
@@ -207,7 +294,7 @@ def('aws', c => {
       case 'describe-key-pairs': return show({ KeyPairs: cloud.all('aws_key_pair').map(k => ({ KeyName: k.id, KeyFingerprint: k.fingerprint, KeyType: 'ed25519' })) });
       case 'terminate-instances': {
         const r = [];
-        for (const id of ids) { const i = cloud.get('aws_instance', id); if (!i) return c.fail(`\nAn error occurred (InvalidInstanceID.NotFound) when calling the TerminateInstances operation: The instance ID '${id}' does not exist`, 254); cloud.terminate(id); cloud.record('delete', 'aws_instance', id, by); r.push({ InstanceId: id, CurrentState: { Code: 32, Name: 'shutting-down' }, PreviousState: { Code: 16, Name: 'running' } }); }
+        for (const id of ids) { const i = cloud.get('aws_instance', id); if (!i || !inRegion(i)) return c.fail(`\nAn error occurred (InvalidInstanceID.NotFound) when calling the TerminateInstances operation: The instance ID '${id}' does not exist`, 254); cloud.terminate(id); cloud.record('delete', 'aws_instance', id, by); r.push({ InstanceId: id, CurrentState: { Code: 32, Name: 'shutting-down' }, PreviousState: { Code: 16, Name: 'running' } }); }
         return show({ TerminatingInstances: r });
       }
       case 'stop-instances': case 'start-instances': {

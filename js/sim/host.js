@@ -239,6 +239,9 @@ export class Host extends World {
   isDir(p) {
     if (this.links.size) p = this.realPath(p);
     if (this.dirs.has(p)) return true;
+    // every repository has .git and .git/hooks (hook scripts live there as plain files)
+    const g = p.match(/^(.*)\/\.git(\/hooks)?$/);
+    if (g && this.repos?.has(g[1] || '/')) return true;
     const pre = p === '/' ? '/' : p + '/';
     for (const f of Map.prototype.keys.call(this.files)) if (f.startsWith(pre)) return true;
     return false;

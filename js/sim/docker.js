@@ -699,7 +699,7 @@ export function vulnsOf(img) {
   for (const [p, f] of Object.entries(img.files || {})) if (/node_modules\/lodash\/package\.json$/.test(p) && /"4\.17\.(1\d|20)"/.test(f.content || '')) v[0] += 1;
   return v;
 }
-const CVES = [['CVE-2024-6119', 'openssl', 'critical'], ['CVE-2024-45490', 'libexpat1', 'critical'], ['CVE-2024-2961', 'glibc', 'high'], ['CVE-2023-45853', 'zlib1g', 'high'], ['CVE-2024-37371', 'krb5', 'high'], ['CVE-2023-52425', 'expat', 'medium'], ['CVE-2024-28182', 'nghttp2', 'medium'], ['CVE-2023-50495', 'ncurses', 'medium'], ['CVE-2023-4039', 'gcc-12', 'low']];
+export const CVES = [['CVE-2024-6119', 'openssl', 'critical'], ['CVE-2024-45490', 'libexpat1', 'critical'], ['CVE-2024-2961', 'glibc', 'high'], ['CVE-2023-45853', 'zlib1g', 'high'], ['CVE-2024-37371', 'krb5', 'high'], ['CVE-2023-52425', 'expat', 'medium'], ['CVE-2024-28182', 'nghttp2', 'medium'], ['CVE-2023-50495', 'ncurses', 'medium'], ['CVE-2023-4039', 'gcc-12', 'low']];
 
 function scoutCmd(c, eng, args) {
   const [op, ...rest] = args;

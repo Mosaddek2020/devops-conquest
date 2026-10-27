@@ -241,6 +241,7 @@ export function worktree(repo) {
   for (const [p, content] of repo.world.files) {
     if (!p.startsWith(pre)) continue;
     const rel = p.slice(pre.length);
+    if (rel.startsWith('.git/')) continue;
     // nested repositories are not part of this tree
     const nested = [...repo.world.repos.keys()].some(r => r !== repo.root && p.startsWith(r + '/') && r.startsWith(pre));
     if (nested) continue;
