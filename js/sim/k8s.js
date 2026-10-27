@@ -519,7 +519,7 @@ export class Cluster {
   // can this node get the image?
   pullable(p, ref) {
     const pr = parseRef(ref);
-    const remote = this.uni.registry.get(pr.short);
+    const remote = this.uni.registry.lookup ? this.uni.registry.lookup(pr) : this.uni.registry.get(pr.short);
     if (remote) {
       if (!remote.private) return { ok: true };
       const auth = this.uni.registryAuth?.[pr.registry];

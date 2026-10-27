@@ -30,6 +30,7 @@ export class Engine {
     if (!ref) return null;
     if (/^(sha256:)?[0-9a-f]{6,64}$/.test(ref)) { const id = ref.replace(/^sha256:/, ''); for (const [k, v] of this.images) if (k.startsWith(id)) return v; }
     const p = parseRef(ref);
+    if (p.digest) { for (const v of this.images.values()) if (v.digest === p.digest) return v; return null; }
     const id = this.tags.get(p.short);
     return id ? this.images.get(id) : null;
   }
@@ -51,12 +52,12 @@ export class Engine {
   pullImage(ref, { quiet = false, out = null } = {}) {
     const p = parseRef(ref);
     const reg = this.uni.registry;
-    const remote = reg.get(p.short);
+    const remote = reg.lookup ? reg.lookup(p) : reg.get(p.short);
     const have = this.findImage(ref);
     if (have && (!remote || have.digest === remote.digest)) { out?.(`${p.tag}: Pulling from ${p.repo}`, `Digest: ${have.digest}`, `Status: Image is up to date for ${p.short}`); return have; }
     if (remote) {
       if (remote.private && !this.loggedIn.has(p.registry)) { out?.(`Error response from daemon: pull access denied for ${p.name}, repository does not exist or may require 'docker login': denied: requested access to the resource is denied`); return null; }
-      const img = this.addImage(JSON.parse(JSON.stringify({ ...remote.image, tags: undefined, users: remote.image.users })), [p.short]);
+      const img = this.addImage(JSON.parse(JSON.stringify({ ...remote.image, tags: undefined, users: remote.image.users })), p.digest ? [] : [p.short]);
       img.digest = remote.digest;
       out?.(`${p.tag}: Pulling from ${p.repo}`, ...remote.image.layers.slice(-3).map((l, k) => `${remote.digest.slice(7 + k, 19 + k)}: Pull complete`), `Digest: ${remote.digest}`, `Status: Downloaded newer image for ${p.short}`, p.registry === 'docker.io' ? `docker.io/${p.repo.includes('/') ? '' : 'library/'}${p.short}` : p.short);
       return img;

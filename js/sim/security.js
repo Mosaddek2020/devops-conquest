@@ -498,7 +498,7 @@ function findImage(c, ref) {
   const eng = c.host.docker || (c.host.packages.has('docker.io') ? engineOf(c.host, c.uni) : null);
   const local = eng?.findImage(ref);
   if (local) return { img: local, digest: null };
-  const r = c.uni.registry?.get(parseRef(ref).short);
+  const r = c.uni.registry?.lookup(parseRef(ref));
   return r ? { img: r.image, digest: r.digest } : null;
 }
 
@@ -835,10 +835,9 @@ def('cosign', c => {
   if (!ref) return c.fail(`Error: accepts at least 1 arg(s), received 0`, 1);
   if (!o['--key']) return c.fail(sub === 'sign' ? 'Error: signing without --key uses keyless (OIDC) signing, which needs a browser: in the lab use --key cosign.key' : 'Error: --key or --certificate-identity is required for verification', 1);
   const p = parseRef(ref);
-  // a digest reference finds whichever tag of that repository currently has the digest
-  const hit = p.digest ? [...(c.uni.registry || new Map())].find(([k, v]) => v.digest === p.digest && parseRef(k).name === p.name) : null;
-  if (hit) p.short = hit[0];
-  const entry = hit ? hit[1] : c.uni.registry?.get(p.short);
+  // a digest reference finds that manifest even after its tag has moved
+  const entry = c.uni.registry?.lookup(p) || null;
+  if (p.digest && entry) p.short = entry.ref;
   const keyText = c.host.files.get(c.resolve(o['--key']));
   if (keyText === undefined) return c.fail(`Error: reading key: open ${o['--key']}: no such file or directory`, 1);
   if (sub === 'sign') {
@@ -907,3 +906,14 @@ ACTIONS['aquasecurity/trivy-action'] = ({ h, uni, w, shell }) => {
   if (w.trivyignores) args.push('--ignorefile', w.trivyignores);
   return shell(`trivy ${args.join(' ')} ${target}`) === 0;
 };
+
+// anchore/sbom-action: an SBOM of an image (or the workspace) with syft
+ACTIONS['anchore/sbom-action'] = ({ h, uni, w, shell }) => {
+  installPkg(h, uni, 'syft', []);
+  const fmt = w.format || 'spdx-json';
+  const out = w['output-file'] || `sbom.${fmt.startsWith('cyclonedx') ? 'cdx' : 'spdx'}.json`;
+  return shell(`syft ${w.image || w.path || '.'} -o ${fmt}=${out}`) === 0;
+};
+
+// sigstore/cosign-installer: puts cosign on the runner
+ACTIONS['sigstore/cosign-installer'] = ({ h, uni, job }) => { installPkg(h, uni, 'cosign', []); job.log.push('  cosign v2.4.1 installed'); return true; };

@@ -355,4 +355,7 @@ export const GLOSSARY = [
   ['AI agent', 'An assistant that plans and runs actions (commands, API calls) itself, rather than only suggesting them.'],
   ['Guardrail policy', 'Rules an agent runs under: what it may do freely, what needs approval, and what is never allowed.'],
   ['Tokens', 'The units models read and write; providers bill per input and output token, and output length drives latency.'],
+  ['Deploy by digest', 'Referencing an image as repo@sha256:… in a deployment, so production runs exactly the bytes that were scanned and signed, even if a tag moves.'],
+  ['Convergence', 'The state where running your infrastructure and configuration code again changes nothing: an empty plan and changed=0.'],
+  ['On-call report', 'A weekly summary of pages and fixes with owned, dated action items, so interruptions turn into improvements.'],
 ];

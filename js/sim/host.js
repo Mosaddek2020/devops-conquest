@@ -20,6 +20,18 @@ export class SimError extends Error {
   constructor(message, code = 1) { super(message); this.code = code; }
 }
 
+// The image registry: tags point at manifests, and every manifest stays addressable by digest
+// after its tag moves (repo@sha256:…), like a real registry.
+export class Registry extends Map {
+  constructor() { super(); this.byDigest = new Map(); }
+  set(k, v) { super.set(k, v); if (v?.digest) this.byDigest.set(v.digest, { ...v, ref: k }); return this; }
+  // p: a parsed reference ({ short, name, digest })
+  lookup(p) {
+    if (p.digest) { const e = this.byDigest.get(p.digest); return e && e.ref.startsWith(p.name + ':') ? e : null; }
+    return this.get(p.short) || null;
+  }
+}
+
 export class Universe extends World {
   constructor(opts = {}) {
     super(opts);
@@ -27,7 +39,7 @@ export class Universe extends World {
     this.dns = new Map();         // fqdn -> ip
     this.byIp = new Map();        // ip -> Host
     this.nextIp = 10;
-    this.registry = new Map();    // 'repo:tag' -> image (docker)
+    this.registry = new Registry(); // 'repo:tag' -> image (docker), plus every pushed digest
     this.clusters = new Map();    // name -> Cluster (kubernetes)
     this.cloud = null;            // cloud account (terraform/aws)
     this.metrics = null;          // metrics store

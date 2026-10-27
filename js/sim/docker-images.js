@@ -353,13 +353,13 @@ export function dockerBuild(engine, { contextDir, dockerfile, tags = [], buildAr
   if (prevImg && engine.images.has(prevImg)) {
     const img = engine.images.get(prevImg);
     for (const tg of tags) engine.tag(img, tg);
-    log.push(' => exporting to image', ` => => writing image sha256:${img.id}`, ...tags.map(tg => ` => => naming to ${parseRef(tg).registry}/${parseRef(tg).repo.includes('/') ? '' : 'library/'}${parseRef(tg).repo}:${parseRef(tg).tag}`));
+    log.push(' => exporting to image', ` => => writing image sha256:${img.id}`, ...tags.map(tg => ` => => naming to ${parseRef(tg).registry}/${parseRef(tg).repo.includes('/') || parseRef(tg).registry !== 'docker.io' ? '' : 'library/'}${parseRef(tg).repo}:${parseRef(tg).tag}`));
     log[0] = `[+] Building 0.${n}s (${n}/${n}) FINISHED`;
     return { ok: true, log, image: img };
   }
   const img = engine.addImage({ files: final.files, users: final.users, binaries: final.binaries, packages: final.packages, base: final.base, baseRef: final.baseRef, sizeMB: final.sizeMB, layers: final.layers, config: { ...final.config, env: final.env, workdir: final.workdir, user: final.user } }, tags);
   engine.cache.set(sameKey, img.id);
-  log.push(' => exporting to image', ` => => writing image sha256:${img.id}`, ...tags.map(tg => ` => => naming to ${parseRef(tg).registry}/${parseRef(tg).repo.includes('/') ? '' : 'library/'}${parseRef(tg).repo}:${parseRef(tg).tag}`));
+  log.push(' => exporting to image', ` => => writing image sha256:${img.id}`, ...tags.map(tg => ` => => naming to ${parseRef(tg).registry}/${parseRef(tg).repo.includes('/') || parseRef(tg).registry !== 'docker.io' ? '' : 'library/'}${parseRef(tg).repo}:${parseRef(tg).tag}`));
   log[0] = `[+] Building ${Math.max(1, uni.time - t0)}.${String(n * 7 % 10)}s (${n}/${n}) FINISHED`;
   return { ok: true, log, image: img };
 }

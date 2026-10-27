@@ -49,7 +49,7 @@ registerLabExtension({
       images: on => { const e = eng(on); return e ? [...e.images.values()] : []; },
       volume: (on, name) => eng(on)?.volumes.get(name) || null,
       network: (on, name) => eng(on)?.networks.get(name) || null,
-      pushed: ref => uni.registry.get(parseRef(ref).short) || null,
+      pushed: ref => uni.registry.lookup(parseRef(ref)),
       // run a command inside a running container, quietly
       inContainer(on, ref, cmd) {
         const c = findContainer(eng(on), ref);

@@ -28,6 +28,7 @@ tested, built and deployed by `.github/workflows/pages.yml`).
 | 10 | Reliability: redundancy and failover, incident response, runbook automation, blameless postmortems, backups and restores, game days | 7 |
 | 11 | DevSecOps: threat modelling and hardening, secrets and key rotation, SAST, DAST, SBOMs and image signing, IaC scanning, pod security, CI security gates | 9 |
 | 12 | AI-assisted DevOps: prompting with context (and without secrets), reviewing AI-written scripts and Terraform, prompt injection and bot permissions, agents under guardrail policies, operating LLM services | 7 |
+| 13 | Hero Trials: commit to cluster, trust but verify (SBOMs and signed digests), platform from code, the on-call week | 4 |
 
 ## How it works
 

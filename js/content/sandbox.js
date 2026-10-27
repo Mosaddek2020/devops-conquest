@@ -1,6 +1,7 @@
 import { relWorld } from './r10-reliability.js';
 import devsecops from './r11-devsecops.js';
 import aiops from './r12-aiops.js';
+import hero from './r13-hero.js';
 
 // Sandbox starting points. Later simulators add more (containers, clusters, cloud).
 
@@ -130,5 +131,12 @@ export const SCENARIOS = {
       H.install('laptop', 'shellcheck');
     },
     panels: ['observe', 'system'],
+  },
+  pipeline: {
+    title: 'Pipeline to cluster',
+    note: 'The notify service in ~/notify with a private registry, a Kubernetes cluster with an ingress for notify.lumen.dev, and CI secrets ready. Build the image, write manifests and a delivery workflow, and push.',
+    setup(H) { hero.lessons.find(l => l.id === 'hero-delivery').lab.setup(H); },
+    cwd: '~/notify',
+    panels: ['cluster', 'github'],
   },
 };

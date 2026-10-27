@@ -12,11 +12,15 @@ registerLabExtension({
     // run fn once the clock passes `seconds` from now (an incident starting mid-lab)
     later(seconds, fn) { const at = uni.time + seconds; let done = false; uni.tickers.push(() => { if (!done && uni.time >= at) { done = true; fn(); } }); },
   }),
-  checks: (uni, sh, api) => ({
+  checks: (uni, sh, api) => {
+    // the team's Prometheus: a server's, not one the laptop happens to run alongside promtool
+    const pick = () => { const ps = uni.obs?.proms.filter(x => x.running) || []; return ps.find(x => x.host.name !== 'laptop') || ps[0] || null; };
+    return {
     obs: () => uni.obs || null,
-    prom: () => uni.obs?.proms.find(p => p.running) || null,
-    promq: expr => { const p = uni.obs?.proms.find(x => x.running); if (!p) return null; try { return evalPromQL(p.tsdb, expr, uni.time); } catch { return null; } },
-    firing: name => { const p = uni.obs?.proms.find(x => x.running); return p ? [...p.alerts.values()].filter(a => a.state === 'firing' && (!name || a.labels.alertname === name)) : []; },
+    prom: () => pick(),
+    promq: expr => { const p = pick(); if (!p) return null; try { return evalPromQL(p.tsdb, expr, uni.time); } catch { return null; } },
+    firing: name => { const p = pick(); return p ? [...p.alerts.values()].filter(a => a.state === 'firing' && (!name || a.labels.alertname === name)) : []; },
     chat: () => uni.obs?.chat || [],
-  }),
+    };
+  },
 });

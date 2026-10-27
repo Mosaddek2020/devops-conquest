@@ -20,7 +20,8 @@ export function installRunner(uni, addServer) {
     h.hidden = true;
     for (const p of ['git', 'nodejs', 'npm', 'jq', 'python3-pip']) installPkg(h, uni, p, []);
     h.pipSystemOk = true; // hosted runner images let pip install into the system Python
-    if (uni.dockerInstall) installPkg(h, uni, 'docker.io', []);
+    if (uni.dockerInstall) { installPkg(h, uni, 'docker.io', []); h.addToGroup('runner', 'docker'); }
+    if (uni.clusters?.size) installPkg(h, uni, 'kubectl', []); // hosted runners ship kubectl
     const repoName = bare.meta.name;
     const ws = `/home/runner/work/${repoName}/${repoName}`;
     h.mkdirMeta(ws, 'runner');

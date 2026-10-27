@@ -361,7 +361,7 @@ def('openssl', c => {
 });
 
 def('certbot', c => {
-  const o = opts(c.args, { bool: ['--nginx', '--non-interactive', '--agree-tos', '--redirect', '--dry-run', '-n', '--standalone', 'renew', 'certificates'], val: ['-d', '--domain', '-m', '--email'] });
+  const o = opts(c.args, { bool: ['--nginx', '--non-interactive', '--agree-tos', '--redirect', '--dry-run', '-n', '--standalone', '--quiet', '-q'], val: ['-d', '--domain', '-m', '--email'] });
   if (c.user !== 'root') return c.fail('The following error was encountered:\n[Errno 13] Permission denied: \'/var/log/letsencrypt/.certbot.lock\'\nEither run as root, or set --config-dir, --work-dir, and --logs-dir to writeable paths.', 1);
   const h = c.host, uni = c.uni;
   if (o._[0] === 'certificates') {
