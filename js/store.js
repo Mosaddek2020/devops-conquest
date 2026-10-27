@@ -8,22 +8,24 @@ import { toast } from './ui/dom.js';
 const KEY = 'devops-conquest:v1';
 export const PASS_MARK = 0.8;
 
+// one rank per realm, at about 92% of the XP for finishing it (lab + quiz + lenses), so a
+// learner who tests out of a realm or misses some perfect scores still reaches the top
 export const RANKS = [
   { xp: 0, name: 'Newcomer', blurb: 'Every expert started with an empty terminal.' },
   { xp: 200, name: 'Shell Dweller', blurb: 'The command line feels like home.' },
-  { xp: 650, name: 'Sysadmin Apprentice', blurb: 'Users, permissions and processes answer to you.' },
-  { xp: 1300, name: 'Network Navigator', blurb: 'Ports, DNS and TLS hold no mysteries.' },
-  { xp: 2100, name: 'Service Keeper', blurb: 'Your services start, restart and log properly.' },
-  { xp: 3000, name: 'Automator', blurb: 'If you did it twice, you scripted it.' },
-  { xp: 4000, name: 'Pipeline Builder', blurb: 'Every change flows through your pipelines.' },
-  { xp: 5100, name: 'Container Captain', blurb: 'You ship software in tidy, small images.' },
-  { xp: 6300, name: 'Cluster Pilot', blurb: 'Kubernetes does what you tell it.' },
-  { xp: 7600, name: 'Infra Coder', blurb: 'Your infrastructure lives in version control.' },
-  { xp: 8900, name: 'Observer', blurb: 'You see problems before users do.' },
-  { xp: 10100, name: 'Incident Commander', blurb: 'Calm in the storm, blameless after it.' },
-  { xp: 11300, name: 'Guardian', blurb: 'Security is built in, not bolted on.' },
-  { xp: 12500, name: 'AI Ops Pilot', blurb: 'You use AI as a power tool, with guardrails.' },
-  { xp: 13700, name: 'DevOps Hero', blurb: 'Zero to hero: the whole loop is yours.' },
+  { xp: 1450, name: 'Sysadmin Apprentice', blurb: 'Users, permissions and processes answer to you.' },
+  { xp: 2250, name: 'Network Navigator', blurb: 'Ports, DNS and TLS hold no mysteries.' },
+  { xp: 2950, name: 'Service Keeper', blurb: 'Your services start, restart and log properly.' },
+  { xp: 3500, name: 'Automator', blurb: 'If you did it twice, you scripted it.' },
+  { xp: 4300, name: 'Pipeline Builder', blurb: 'Every change flows through your pipelines.' },
+  { xp: 5350, name: 'Container Captain', blurb: 'You ship software in tidy, small images.' },
+  { xp: 6400, name: 'Cluster Pilot', blurb: 'Kubernetes does what you tell it.' },
+  { xp: 7500, name: 'Infra Coder', blurb: 'Your infrastructure lives in version control.' },
+  { xp: 8700, name: 'Observer', blurb: 'You see problems before users do.' },
+  { xp: 9650, name: 'Incident Commander', blurb: 'Calm in the storm, blameless after it.' },
+  { xp: 10850, name: 'Guardian', blurb: 'Security is built in, not bolted on.' },
+  { xp: 11800, name: 'AI Ops Pilot', blurb: 'You use AI as a power tool, with guardrails.' },
+  { xp: 12500, name: 'DevOps Hero', blurb: 'Zero to hero: the whole loop is yours.' },
 ];
 
 export const XP = { lens: 5, lab: 60, quiz: 50, perfect: 20, boss: 120, testOut: 40 };

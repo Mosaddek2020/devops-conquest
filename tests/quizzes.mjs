@@ -29,5 +29,16 @@ for (const r of realms) for (const l of r.lessons) {
     } else bad(id, i, `unknown type ${q.type}`);
   });
 }
+// the rank ladder must stay reachable: the top rank needs less XP than mastering every lesson
+// earns without any perfect-score bonus (lab or boss lab + quiz pass + every lens)
+{
+  const { XP, RANKS } = await import('../js/store.js');
+  const text = (await import('../js/content/text.js')).default;
+  let earnable = 0;
+  for (const r of realms) for (const l of r.lessons) earnable += (l.boss ? XP.boss : XP.lab) + XP.quiz + (text[`${r.id}/${l.id}`]?.lenses?.length || 0) * XP.lens;
+  const top = RANKS[RANKS.length - 1];
+  if (top.xp > earnable * 0.95) { console.log(`✗ rank "${top.name}" needs ${top.xp} XP but mastering everything earns ${earnable}`); problems++; }
+  else console.log(`ranks: "${top.name}" at ${top.xp} XP of ${earnable} earnable`);
+}
 console.log(`\n${total} questions checked, ${problems} problems`);
 process.exit(problems ? 1 : 0);
