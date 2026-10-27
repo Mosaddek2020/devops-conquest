@@ -183,7 +183,7 @@ export function runGh(ctx, args, git) {
     out.push('Work seamlessly with GitHub from the command line.', '', 'USAGE', '  gh <command> <subcommand> [flags]', '', 'CORE COMMANDS',
       '  auth:        Authenticate gh and git with GitHub', '  browse:      Open repositories, issues, pull requests in the browser',
       '  issue:       Manage issues', '  pr:          Manage pull requests', '  release:     Manage releases', '  repo:        Manage repositories',
-      '  run:         View details about workflow runs', '  secret:      Manage Actions secrets', '  ssh-key:     Manage SSH keys', '  workflow:    List and run workflows');
+      '  run:         View details about workflow runs', '  api:         Make an authenticated GitHub API request', '  secret:      Manage Actions secrets', '  ssh-key:     Manage SSH keys', '  workflow:    List and run workflows');
     return 0;
   }
   if (!w.github.authed && !(group === 'auth')) throw new GitError('To get started with GitHub CLI, please run:  gh auth login', 4);
@@ -196,6 +196,63 @@ export function runGh(ctx, args, git) {
       out.push('github.com', `  ✓ Logged in to github.com account ${me} (keyring)`, '  - Active account: true', '  - Git operations protocol: https', `  - Token: gho_************************************`, `  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'`);
       return 0;
     }
+  }
+
+  // gh api: the REST endpoints a team uses to lock down a repository
+  if (group === 'api') {
+    const a = [sub, ...rest].filter(x => x !== undefined);
+    let method = null, path = null, input = null;
+    const fields = {};
+    for (let i = 0; i < a.length; i++) {
+      const x = a[i];
+      if (x === '-X' || x === '--method') method = String(a[++i]).toUpperCase();
+      else if (['-f', '-F', '--field', '--raw-field'].includes(x)) { const [k, ...v] = String(a[++i]).split('='); const val = v.join('='); fields[k] = x === '-F' || x === '--field' ? (val === 'true' ? true : val === 'false' ? false : /^\d+$/.test(val) ? Number(val) : val) : val; }
+      else if (x === '--input') input = a[++i];
+      else if (x === '-H' || x === '--header' || x === '--jq' || x === '-q') i++;
+      else if (!path) path = x.replace(/^\//, '');
+    }
+    if (!path) throw new GitError('usage: gh api <endpoint> [-X METHOD] [-f key=value] [--input file]', 1);
+    method = method || (Object.keys(fields).length || input ? 'POST' : 'GET');
+    let body = { ...fields };
+    if (input) {
+      const p = input.startsWith('/') ? input : `${ctx.cwd}/${input}`.replace(/\/\.\//g, '/');
+      const text = w.files.get(p);
+      if (text === undefined) throw new GitError(`open ${input}: no such file or directory`, 1);
+      try { body = JSON.parse(text); } catch (e) { throw new GitError(`gh: Problems parsing JSON (HTTP 400)\n${e.message}`, 1); }
+    }
+    const m = path.match(/^repos\/([^/]+)\/([^/]+)(\/.*)?$/);
+    const bare = m && w.remotes.get(`https://github.com/${m[1]}/${m[2]}.git`);
+    if (!bare) throw new GitError('gh: Not Found (HTTP 404)', 1);
+    const sub2 = m[3] || '';
+    const show = o => { out.push(...JSON.stringify(o, null, 2).split('\n')); };
+    w.emit({ type: 'gh-api', method, path, body });
+    let pm;
+    if ((pm = sub2.match(/^\/branches\/([^/]+)\/protection$/))) {
+      const br = pm[1];
+      bare.meta.protected = bare.meta.protected || {};
+      const view = r => ({ url: `https://api.github.com/${path}`, required_status_checks: r.requireChecks ? { strict: !!r.requireUpToDate, contexts: r.requiredContexts || [] } : null, required_pull_request_reviews: r.requirePR ? { required_approving_review_count: r.requiredReviews || 0, dismiss_stale_reviews: !!r.dismissStale } : null, enforce_admins: { enabled: !!r.enforceAdmins } });
+      if (method === 'GET') { const r = bare.meta.protected[br]; if (!r) throw new GitError('gh: Branch not protected (HTTP 404)', 1); show(view(r)); return 0; }
+      if (method === 'DELETE') { delete bare.meta.protected[br]; return 0; }
+      if (method === 'PUT') {
+        for (const k of ['required_status_checks', 'enforce_admins', 'required_pull_request_reviews', 'restrictions']) if (!(k in body)) throw new GitError(`gh: Invalid request.\n\n"${k}" wasn't supplied. (HTTP 422)`, 1);
+        const rpr = body.required_pull_request_reviews, rsc = body.required_status_checks;
+        const rule = { requirePR: !!rpr, requiredReviews: rpr ? Number(rpr.required_approving_review_count ?? 1) : 0, dismissStale: !!rpr?.dismiss_stale_reviews, requireChecks: !!rsc, requireUpToDate: !!rsc?.strict, requiredContexts: rsc?.contexts || [], enforceAdmins: !!body.enforce_admins };
+        bare.meta.protected[br] = rule;
+        show(view(rule));
+        return 0;
+      }
+    }
+    if (sub2 === '/actions/permissions/workflow') {
+      const cur = bare.meta.workflowPerms || { default: 'write', canApprove: false };
+      if (method === 'GET') { show({ default_workflow_permissions: cur.default, can_approve_pull_request_reviews: !!cur.canApprove }); return 0; }
+      if (method === 'PUT') {
+        if (body.default_workflow_permissions && !['read', 'write'].includes(body.default_workflow_permissions)) throw new GitError('gh: Invalid request. default_workflow_permissions must be read or write (HTTP 422)', 1);
+        bare.meta.workflowPerms = { default: body.default_workflow_permissions || cur.default, canApprove: body.can_approve_pull_request_reviews ?? cur.canApprove };
+        return 0;
+      }
+    }
+    if (!sub2 && method === 'GET') { show({ full_name: `${bare.meta.owner}/${bare.meta.name}`, private: !!bare.meta.private, default_branch: 'main' }); return 0; }
+    throw new GitError('gh: Not Found (HTTP 404)', 1);
   }
 
   if (group === 'ssh-key') {

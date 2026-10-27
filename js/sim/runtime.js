@@ -147,6 +147,8 @@ export class NodeApp {
     for (const m of s.matchAll(/if\s*\(\s*!\s*([\w$.]+)\s*\)\s*\{?\s*(?:throw\s+new\s+Error\(\s*(['"`])([\s\S]*?)\2\s*\)|console\.error\(\s*(['"`])([\s\S]*?)\4\s*\)\s*;?\s*process\.exit\(\s*(\d+)\s*\))/g)) {
       this.checks.push({ expr: m[1], message: m[3] ?? m[5], viaExit: !!m[5], line: lineOf(s, m.index), code: m[6] ? Number(m[6]) : 1 });
     }
+    // files opened for writing at startup: fs.openSync('/var/lib/app/x.db', 'a') and friends
+    this.opens = [...s.matchAll(/fs\.(openSync|appendFileSync|writeFileSync|createWriteStream)\(\s*(['"])([^'"]+)\2/g)].map(m => ({ path: m[3], fn: m[1], line: lineOf(s, m.index) }));
     // dependencies: connect(process.env.DATABASE_URL) / createClient({ url: … }) / new Pool({ connectionString: … })
     this.deps = [];
     for (const m of s.matchAll(/(connect|createClient|createPool|new\s+Pool|new\s+Redis|new\s+Client)\s*\(/g)) {
@@ -203,6 +205,13 @@ export class NodeApp {
       let d = dirname(this.file), found = false;
       while (true) { if (this.host.isDir(normPath(d + '/node_modules/' + mod))) { found = true; break; } if (d === '/') break; d = dirname(d); }
       if (!found) return { ok: false, code: 1, logs: ['node:internal/modules/cjs/loader:1228', '  throw err;', '  ^', '', `Error: Cannot find module '${mod}'`, `Require stack:`, `- ${this.file}`, '    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)', '  code: \'MODULE_NOT_FOUND\',', '', 'Node.js v20.18.0'] };
+    }
+    for (const o of this.opens || []) {
+      const p = normPath(o.path.startsWith('/') ? o.path : dirname(this.file) + '/' + o.path);
+      const h = this.host, st = h.stat(p) || h.stat(dirname(p));
+      if (!st || this.user === 'root') continue;
+      const bits = st.owner === this.user ? st.mode >> 6 : h.userGroups(this.user).includes(st.group) ? st.mode >> 3 : st.mode;
+      if (!(bits & 2)) return { ok: false, code: 1, logs: ['node:fs:573', '  return binding.open(', '         ^', '', `Error: EACCES: permission denied, open '${p}'`, `    at Object.${o.fn} (node:fs:573:18)`, `    at Object.<anonymous> (${this.file}:${o.line}:${4})`, '    at Module._compile (node:internal/modules/cjs/loader:1469:14) {', '  errno: -13,', "  code: 'EACCES',", "  syscall: 'open',", `  path: '${p}'`, '}', '', 'Node.js v20.18.0'] };
     }
     for (const ch of this.checks) {
       let v;
@@ -265,6 +274,8 @@ export class NodeApp {
       const st = this.uni.obs ? this.uni.obs.statsFor(this.host, this.port) : null;
       const proc = this.proc;
       const extra = ['# TYPE process_resident_memory_bytes gauge', `process_resident_memory_bytes ${Math.round((proc?.mem || this.memMB) * 1048576)}`, '# TYPE process_cpu_seconds_total counter', `process_cpu_seconds_total ${((this.uni.time - (proc?.start || this.uni.time)) * (proc?.cpu || 0.3) / 10).toFixed(2)}`, '# TYPE nodejs_eventloop_lag_seconds gauge', `nodejs_eventloop_lag_seconds ${this.lagSeconds ?? 0.0021}`];
+      // app-specific metric families a simulator registers for this app (e.g. an LLM gateway's token counters)
+      extra.push(...(this.uni.obs?.metricHooks?.get(`${this.host.name}:${this.port}`)?.(this) || []));
       return { status: 200, headers: { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' }, body: st ? st.exposition(extra) : extra.join('\n') + '\n' };
     }
     const hook = this.uni.appHooks?.[this.hookKey || this.host.name]?.(req, this);

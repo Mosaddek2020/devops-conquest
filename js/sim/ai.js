@@ -4,7 +4,8 @@
 // important AI skill in operations: reading and verifying before running.
 
 import { def } from './registry.js';
-import { C } from '../git/world.js';
+import { C, stripAnsi } from '../git/world.js';
+import { scanSecrets } from './security.js';
 
 const FLAGS = {
   rm: { '-r': 'recursive: deletes directories and everything inside', '-R': 'recursive', '-f': 'force: never asks, ignores missing files', '-i': 'asks before each removal', '-v': 'prints each removal' },
@@ -98,7 +99,7 @@ def(['ai', 'copilot', 'assistant'], c => {
   const args = c.args;
   const uni = c.uni;
   if (!args.length || args[0] === 'help' || args[0] === '--help') {
-    c.print('usage:', '  ai "how do I …?"          ask for help (the answer may be wrong: verify it)', '  ai explain "<command>"     break a command down and rate its risk', '  ai fix                     suggest a fix for your last failed command');
+    c.print('usage:', '  ai "how do I …?"          ask for help (the answer may be wrong: verify it)', '  … | ai "why …?"            give it context: pipe in logs or output', '  ai -f <file> "…"           attach a file as context', '  ai explain "<command>"     break a command down and rate its risk', '  ai fix                     suggest a fix for your last failed command');
     return 0;
   }
   if (args[0] === 'explain') {
@@ -121,11 +122,26 @@ def(['ai', 'copilot', 'assistant'], c => {
     uni.emit({ type: 'ai-fix', host: c.host.name, line: last.line, suggestions: rule?.suggest || [] });
     return 0;
   }
-  const q = args.join(' ').replace(/^["']|["']$/g, '');
-  const rule = (uni.ai?.rules || []).find(r => !r.fix && r.when.test(q));
-  const lines = rule ? rule.reply : genericAnswer(q);
+  // context: piped stdin and attached files (-f/--file), like pasting logs into a chat
+  const rest = [...args], files = [];
+  for (let i = 0; i < rest.length; i++) if ((rest[i] === '-f' || rest[i] === '--file') && rest[i + 1]) { files.push(rest[i + 1]); rest.splice(i--, 2); }
+  let context = stripAnsi(c.stdin || '');
+  for (const f of files) { const t = c.host.files.get(c.resolve(f)); if (t === undefined) return c.fail(`ai: ${f}: No such file or directory`, 1); context += (context ? '\n' : '') + t; }
+  const q = rest.join(' ').replace(/^["']|["']$/g, '');
+  // a company AI gateway with data-loss prevention refuses prompts that carry secrets
+  if (uni.ai?.dlp) {
+    const leaks = scanSecrets(q + '\n' + context);
+    if (leaks.length) {
+      c.eprint(C.red(`✋ blocked by ${uni.ai.dlp === true ? 'the AI gateway' : uni.ai.dlp}: the prompt contains ${leaks.length === 1 ? 'a secret' : leaks.length + ' secrets'} (${[...new Set(leaks.map(l => l.rule.id))].join(', ')}, line ${leaks.map(l => l.line).join(', ')}).`), C.dim('  Nothing was sent. Redact it (e.g. sed -E \'s/(PASSWORD|SECRET|KEY)=.*/\\1=[REDACTED]/\') and ask again.'));
+      uni.emit({ type: 'ai-ask', host: c.host.name, q, rule: null, blocked: true, context: !!context, contextBytes: context.length });
+      return 3;
+    }
+  }
+  const rule = (uni.ai?.rules || []).find(r => !r.fix && r.when.test(q) && (!r.ctx || r.ctx.test(context)) && (r.ctx || !r.needsContext));
+  const lines = rule ? (typeof rule.reply === 'function' ? rule.reply({ q, context, c }) : rule.reply) : genericAnswer(q, context);
   box(c, lines);
-  uni.emit({ type: 'ai-ask', host: c.host.name, q, rule: rule?.id || null, suggestions: rule?.suggest || [] });
+  if (rule?.writes) for (const [p, text] of Object.entries(rule.writes)) { const abs = c.resolve(p); c.host.writeFile(abs, text, c.user); c.print(C.dim(`  (the assistant wrote ${p})`)); }
+  uni.emit({ type: 'ai-ask', host: c.host.name, q, rule: rule?.id || null, suggestions: rule?.suggest || [], context: !!context, contextBytes: context.length });
   return 0;
 }, { always: true });
 
@@ -139,8 +155,9 @@ function genericFix(last) {
   return ['I am not sure what went wrong. Read the error message line by line, then look at the logs:', '  journalctl -xe   or   journalctl -u <service> -n 50'];
 }
 
-function genericAnswer(q) {
+function genericAnswer(q, context = '') {
   const t = q.toLowerCase();
+  if (context) return ['Thanks for the context. I do not see a clear cause in it.', 'Look for the first error (not the last), and what changed just before it.'];
   if (/disk|space|full/.test(t)) return ['Find what uses space first:', '  df -h', '  sudo du -sh /var/log/* | sort -h', 'Then clean the right thing (old logs, journal, old releases).'];
   if (/port|listen/.test(t)) return ['See which process listens where:', '  sudo ss -tlnp'];
   if (/log/.test(t)) return ['Service logs: journalctl -u <service> -n 50', 'Files: /var/log/ (e.g. /var/log/nginx/error.log)'];

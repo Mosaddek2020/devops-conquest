@@ -27,6 +27,7 @@ tested, built and deployed by `.github/workflows/pages.yml`).
 | 9 | Observability: golden signals, Prometheus, PromQL, dashboards, alerting, logs, traces, SLOs | 9 |
 | 10 | Reliability: redundancy and failover, incident response, runbook automation, blameless postmortems, backups and restores, game days | 7 |
 | 11 | DevSecOps: threat modelling and hardening, secrets and key rotation, SAST, DAST, SBOMs and image signing, IaC scanning, pod security, CI security gates | 9 |
+| 12 | AI-assisted DevOps: prompting with context (and without secrets), reviewing AI-written scripts and Terraform, prompt injection and bot permissions, agents under guardrail policies, operating LLM services | 7 |
 
 ## How it works
 
@@ -42,7 +43,9 @@ tested, built and deployed by `.github/workflows/pages.yml`).
   `promql.js` the query engine), reliability tools (`reliability.js`: `ab` load tests, an
   `incident` CLI with a status page, `pg_dump`), security tools (`security.js`: gitleaks,
   semgrep, trivy, syft, OWASP ZAP baseline/full scans, lynis, cosign, all of which inspect the
-  simulated world so a finding only goes away when the problem is fixed) and a
+  simulated world so a finding only goes away when the problem is fixed), AI-ops tools
+  (`aiops.js`: shellcheck, an ops `agent` with allow/ask/deny policies and an audit log, an AI
+  review-bot action, an LLM gateway with token and cost metrics) and a
   simulated AI assistant (`ai`) whose scripted answers are sometimes wrong on purpose.
 - `js/content/rNN-*.js` defines each realm's labs (setup, tasks with checks and reference
   solutions) and quizzes; `content/<realm>/<lesson>.md` holds the lesson text.

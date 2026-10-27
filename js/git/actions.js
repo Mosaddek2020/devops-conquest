@@ -21,13 +21,14 @@ export function parseWorkflow(text) {
   if (!wf.on.length) wf.errors.push("missing 'on:' trigger");
   for (const e of wf.on) if (!KNOWN_EVENTS.includes(e)) wf.errors.push(`unknown event '${e}' in 'on:'`);
   wf.env = doc.env && typeof doc.env === 'object' ? doc.env : {};
+  wf.permissions = doc.permissions ?? null;
   const jobs = doc.jobs;
   if (!jobs || typeof jobs !== 'object' || Array.isArray(jobs)) { wf.errors.push("missing 'jobs:'"); return wf; }
   for (const [id, j] of Object.entries(jobs)) {
     if (!j || typeof j !== 'object') { wf.errors.push(`job '${id}' is empty`); continue; }
     const env = j.environment;
     const job = {
-      id, name: j.name ? String(j.name) : id, runsOn: j['runs-on'] || null,
+      id, name: j.name ? String(j.name) : id, runsOn: j['runs-on'] || null, permissions: j.permissions ?? null,
       needs: j.needs ? [].concat(j.needs).map(String) : [],
       if: j.if != null ? String(j.if) : null,
       environment: typeof env === 'string' ? { name: env } : env && typeof env === 'object' ? { name: env.name, url: env.url } : null,

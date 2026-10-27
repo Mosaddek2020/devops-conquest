@@ -215,6 +215,21 @@ export const SHEET = [
     ['kubectl -n NS get events --field-selector reason=FailedCreate', 'Why a ReplicaSet cannot create pods.'],
     ['aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=AKIA…', 'Everything one access key did.'],
   ]],
+  ['AI-assisted DevOps', [
+    ['journalctl -u svc -n 50 | ai "why does svc fail to start?"', 'Ask with evidence, not a vague question.'],
+    ["… | sed -E 's/(PASSWORD|SECRET|TOKEN)=[^ ]*/\\1=[REDACTED]/g' | ai \"…\"", 'Redact secrets before they leave your machine.'],
+    ['ai explain "<command>"', 'Break a suggested command down and rate its risk before running it.'],
+    ['shellcheck script.sh', 'Lint generated shell: SC2115, SC2154/SC2034 (typos), SC2086, SC2164.'],
+    ['set -euo pipefail · "${DIR:?}" · cd "$DIR" || exit 1', 'Make scripts fail safely.'],
+    ['git diff · terraform validate · terraform plan · trivy config .', 'Review AI-written infrastructure: request, syntax, effect, security.'],
+    ['permissions: { contents: read, pull-requests: write }', 'A review bot that can comment but not push, approve or merge.'],
+    ['gh api -X PUT repos/O/R/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false', 'Read-only default token; Actions cannot approve PRs.'],
+    ['gh api -X PUT repos/O/R/branches/main/protection --input protection.json', 'Require a human approving review on main.'],
+    ['agent plan "…" · agent policy · agent run "…" · agent log', 'Look before it acts; run under policy; review the audit log.'],
+    ['~/.agent/policy.yaml: mode: ask · allow: [read-only] · deny: [irreversible]', 'Deny beats allow; unknown commands ask.'],
+    ["sum by (client) (rate(llm_cost_usd_total[5m])) * 3600", 'LLM spend in dollars per hour, per client.'],
+    ['rate limits · max_output_tokens · cache', 'Gateway levers against a runaway client.'],
+  ]],
 ];
 
 export const DEBUG = [
@@ -333,4 +348,11 @@ export const GLOSSARY = [
   ['Pod Security Standards', 'The privileged, baseline and restricted levels Kubernetes enforces per namespace with Pod Security Admission.'],
   ['Secret rotation', 'Replacing a credential with a new one and revoking the old, in an order that causes no outage.'],
   ['Security gate', 'An automated check in CI (secrets, code, dependencies, IaC) that blocks a merge when it finds something serious.'],
+  ['Context (prompting)', 'The evidence you give an assistant: errors, log lines, versions, what changed. Better context, better answers.'],
+  ['AI gateway', 'A proxy between a company and model providers that enforces policy: approved models, data-loss prevention (no secrets), quotas and logging.'],
+  ['Hallucination', 'A confident but invented answer, such as a command option or Terraform argument that does not exist.'],
+  ['Prompt injection', 'Instructions hidden in a model\'s input (a document, a diff, a web page) that steer what it does.'],
+  ['AI agent', 'An assistant that plans and runs actions (commands, API calls) itself, rather than only suggesting them.'],
+  ['Guardrail policy', 'Rules an agent runs under: what it may do freely, what needs approval, and what is never allowed.'],
+  ['Tokens', 'The units models read and write; providers bill per input and output token, and output length drives latency.'],
 ];

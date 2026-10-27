@@ -9,7 +9,7 @@ import { stripAnsi } from '../git/world.js';
 
 let runnerSeq = 0;
 
-// marketplace actions other modules teach the runner: ACTIONS['owner/name'] = ({ h, ws, w, job, run, world, flat, uni, shell }) => ok
+// marketplace actions other modules teach the runner: ACTIONS['owner/name'] = ({ h, ws, w, job, run, world, flat, uni, shell, bare }) => ok
 export const ACTIONS = {};
 
 export function installRunner(uni, addServer) {
@@ -75,7 +75,7 @@ export function installRunner(uni, addServer) {
               if (text) job.log.push(...text.split('\n').map(l => '  ' + l));
               return code;
             };
-            if (!ACTIONS[action]({ h, ws, w, job, run, world, flat, uni, shell })) { ok = false; break; }
+            if (!ACTIONS[action]({ h, ws, w, job, run, world, flat, uni, shell, bare })) { ok = false; break; }
           } else job.log.push('  (action simulated)');
           continue;
         }

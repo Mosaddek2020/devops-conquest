@@ -104,6 +104,7 @@ export const CATALOG = {
   syft: { version: '1.16.0', size: '74.0 MB', bins: ['syft'] },
   cosign: { version: '2.4.1', size: '109 MB', bins: ['cosign'] },
   zaproxy: { version: '2.15.0', size: '212 MB', bins: ['zap-baseline.py', 'zap-full-scan.py'] },
+  shellcheck: { version: '0.10.0-1', size: '2,511 kB', bins: ['shellcheck'] },
   'unattended-upgrades': { version: '2.9.1+nmu4ubuntu1', size: '51.1 kB', bins: [] },
 };
 

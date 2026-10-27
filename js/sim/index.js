@@ -19,6 +19,7 @@ import './obs.js';
 import './obs-lab.js';
 import './reliability.js';
 import './security.js';
+import './aiops.js';
 import './iac-lab.js';
 import { wirePackages } from './packages.js';
 import { installSystemdTicker } from './systemd.js';

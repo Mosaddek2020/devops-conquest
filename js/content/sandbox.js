@@ -1,5 +1,6 @@
 import { relWorld } from './r10-reliability.js';
 import devsecops from './r11-devsecops.js';
+import aiops from './r12-aiops.js';
 
 // Sandbox starting points. Later simulators add more (containers, clusters, cloud).
 
@@ -118,5 +119,16 @@ export const SCENARIOS = {
       H.install('laptop', 'gitleaks', 'semgrep', 'syft', 'cosign', 'zaproxy');
     },
     panels: ['network', 'files'],
+  },
+  aiops: {
+    title: 'AI ops desk',
+    note: 'An LLM gateway on ai1 with Prometheus on mon, and an ops agent on your laptop with no policy yet. Try: promtool query instant http://mon:9090 \'sum by (client) (rate(llm_cost_usd_total[5m])) * 3600\', agent plan "free disk space on db1", shellcheck, ai explain "…".',
+    setup(H) {
+      const lab = name => aiops.lessons.find(l => l.id === name).lab;
+      lab('llm-services').setup(H);
+      lab('ai-agents').setup(H);
+      H.install('laptop', 'shellcheck');
+    },
+    panels: ['observe', 'system'],
   },
 };
