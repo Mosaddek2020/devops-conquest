@@ -94,6 +94,7 @@ export const CATALOG = {
   infracost: { version: '0.10.39', size: '61.2 MB', bins: ['infracost'] },
   'lumen-cli': { version: '2.4.0', size: '9,812 kB', bins: ['lumen'] },
   make: { version: '4.3-4.1build2', size: '180 kB', bins: ['make'] },
+  bats: { version: '1.10.0-1', size: '29.1 kB', bins: ['bats'] },
   sysstat: { version: '12.6.1-2', size: '486 kB', bins: ['iostat', 'mpstat', 'pidstat', 'sar'] },
   strace: { version: '6.8-0ubuntu2', size: '1,353 kB', bins: ['strace'] },
   tcpdump: { version: '4.99.4-3ubuntu4', size: '481 kB', bins: ['tcpdump'] },

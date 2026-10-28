@@ -16,7 +16,12 @@ function parse(src) {
   const ws = () => { while (/\s/.test(s[i])) i++; };
   const peek = (t) => { ws(); return s.startsWith(t, i); };
   const eat = (t) => { ws(); if (!s.startsWith(t, i)) throw new JqError(`jq: error: syntax error, expected ${t} at position ${i}`); i += t.length; };
-  function pipe() { let l = comma(); while (peek('|') && !peek('||')) { i++; const r = comma(); const a = l; l = { k: 'pipe', a, b: r }; } return l; }
+  function pipe() {
+    let l = comma();
+    if (peek('as ') || peek('as$')) { i += 2; ws(); const m = s.slice(i).match(/^\$([A-Za-z_][A-Za-z0-9_]*)/); if (!m) throw new JqError(`jq: error: syntax error, expected $name after as`); i += m[0].length; eat('|'); return { k: 'bind', src: l, name: m[1], body: pipe() }; }
+    while (peek('|') && !peek('||')) { i++; const r = comma(); const a = l; l = { k: 'pipe', a, b: r }; if (peek('as ')) { i += 2; ws(); const m = s.slice(i).match(/^\$([A-Za-z_][A-Za-z0-9_]*)/); i += m[0].length; eat('|'); return { k: 'pipe', a, b: { k: 'bind', src: r, name: m[1], body: pipe() } }; } }
+    return l;
+  }
   function comma() { let l = alt(); while (peek(',')) { i++; const r = alt(); l = { k: 'comma', a: l, b: r }; } return l; }
   function alt() { let l = or(); while (peek('//')) { i += 2; l = { k: 'alt', a: l, b: or() }; } return l; }
   function or() { let l = and(); while (peek('or ')) { i += 2; l = { k: 'or', a: l, b: and() }; } return l; }
@@ -72,6 +77,18 @@ function parse(src) {
       return { k: 'id' };
     }
     if (c === '"') return stringLit();
+    if (c === '$') { const m = s.slice(i + 1).match(/^[A-Za-z_][A-Za-z0-9_]*/); if (!m) throw new JqError(`jq: error: syntax error at position ${i}`); i += 1 + m[0].length; return { k: 'var', name: m[0] }; }
+    if (c === '@') { const m = s.slice(i + 1).match(/^[a-z0-9]+/); i += 1 + m[0].length; return { k: 'format', name: m[0] }; }
+    if (s.startsWith('if', i) && /[\s(]/.test(s[i + 2] || '')) {
+      i += 2;
+      const cond = pipe(); eat('then'); const then = pipe();
+      const elifs = [];
+      while (peek('elif')) { i += 4; const c2 = pipe(); eat('then'); elifs.push([c2, pipe()]); }
+      let els = null;
+      if (peek('else')) { i += 4; els = pipe(); }
+      eat('end');
+      return { k: 'if', cond, then, elifs, els };
+    }
     if (c === '(') { i++; const e = pipe(); eat(')'); return e; }
     if (c === '[') { i++; if (peek(']')) { i++; return { k: 'arr', e: null }; } const e = pipe(); eat(']'); return { k: 'arr', e }; }
     if (c === '{') {
@@ -116,6 +133,7 @@ const typeOf = v => v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v 
 const truthy = v => v !== null && v !== false && v !== undefined;
 const cmpVals = (a, b) => { const order = ['null', 'boolean', 'number', 'string', 'array', 'object']; const ta = order.indexOf(typeOf(a)), tb = order.indexOf(typeOf(b)); if (ta !== tb) return ta - tb; if (typeof a === 'number' || typeof a === 'string') return a < b ? -1 : a > b ? 1 : 0; return JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0; };
 
+let VARS = {};
 function run(node, input) {
   switch (node.k) {
     case 'id': return [input];
@@ -146,6 +164,23 @@ function run(node, input) {
     }
     case 'interp': return [node.parts.map(p => typeof p === 'string' ? p : (() => { const v = run(p, input)[0]; return typeof v === 'string' ? v : JSON.stringify(v); })()).join('')];
     case 'fn': return fn(node, input);
+    case 'var': { if (node.name === 'ENV') return [VARS.ENV || {}]; if (!(node.name in VARS)) throw new JqError(`jq: error: $${node.name} is not defined`); return [VARS[node.name]]; }
+    case 'bind': return run(node.src, input).flatMap(v => { const prev = VARS[node.name], had = node.name in VARS; VARS[node.name] = v; try { return run(node.body, input); } finally { if (had) VARS[node.name] = prev; else delete VARS[node.name]; } });
+    case 'if': { for (const [c2, b] of [[node.cond, node.then], ...node.elifs]) if (truthy(run(c2, input)[0])) return run(b, input); return node.els ? run(node.els, input) : [input]; }
+    case 'format': {
+      const cell = v => v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
+      switch (node.name) {
+        case 'csv': if (!Array.isArray(input)) throw new JqError(`jq: error: ${typeOf(input)} cannot be csv-formatted, only an array can be`); return [input.map(v => typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : cell(v)).join(',')];
+        case 'tsv': if (!Array.isArray(input)) throw new JqError(`jq: error: ${typeOf(input)} cannot be tsv-formatted, only an array can be`); return [input.map(v => cell(v).replace(/\t/g, '\\t')).join('\t')];
+        case 'json': return [JSON.stringify(input)];
+        case 'text': return [cell(input)];
+        case 'base64': return [btoa(cell(input))];
+        case 'base64d': return [atob(cell(input))];
+        case 'uri': return [encodeURIComponent(cell(input))];
+        case 'sh': return [Array.isArray(input) ? input.map(v => `'${cell(v).replace(/'/g, "'\\''")}'`).join(' ') : `'${cell(input).replace(/'/g, "'\\''")}'`];
+      }
+      throw new JqError(`jq: error: ${node.name} is not a valid format`);
+    }
   }
   throw new JqError('jq: error: unsupported filter');
 }
@@ -155,7 +190,7 @@ function fn(node, input) {
   const arg = (k, v = input) => run(a[k], v)[0];
   switch (node.name) {
     case 'select': return truthy(arg(0)) ? [input] : [];
-    case 'map': return [input.map(v => run(a[0], v)[0])];
+    case 'map': return [(Array.isArray(input) ? input : Object.values(input || {})).flatMap(v => run(a[0], v))];
     case 'keys': return [Object.keys(input).sort()];
     case 'keys_unsorted': return [Object.keys(input)];
     case 'length': return [input === null ? 0 : typeof input === 'string' || Array.isArray(input) ? input.length : typeof input === 'object' ? Object.keys(input).length : Math.abs(input)];
@@ -200,6 +235,21 @@ function fn(node, input) {
     case 'ltrimstr': { const p = arg(0); return [String(input).startsWith(p) ? String(input).slice(p.length) : input]; }
     case 'rtrimstr': { const p = arg(0); return [String(input).endsWith(p) ? String(input).slice(0, -p.length) : input]; }
     case 'floor': return [Math.floor(input)];
+    case 'length_': return [0];
+    case 'ascii': return [String.fromCharCode(input)];
+    case 'tojson_': return [JSON.stringify(input)];
+    case 'limit': return run(a[1], input).slice(0, arg(0));
+    case 'range': return Array.from({ length: Math.max(0, (a.length > 1 ? arg(1) : arg(0)) - (a.length > 1 ? arg(0) : 0)) }, (_, k) => k + (a.length > 1 ? arg(0) : 0));
+    case 'paths': { const out = []; const walk = (v, p) => { if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { const q = [...p, Array.isArray(v) ? Number(k) : k]; out.push(q); walk(x, q); } }; walk(input, []); return out; }
+    case 'isnull': return [input === null];
+    case 'error': throw new JqError(`jq: error (at <stdin>:0): ${a.length ? arg(0) : JSON.stringify(input)}`);
+    case 'input_line_number': return [0];
+    case 'sub': case 'gsub': return [String(input).replace(new RegExp(arg(0), node.name === 'gsub' ? 'g' : ''), arg(1))];
+    case 'ceil': return [Math.ceil(input)];
+    case 'sqrt': return [Math.sqrt(input)];
+    case 'todate': return [new Date(input * 1000).toISOString().replace(/\.\d+Z$/, 'Z')];
+    case 'fromdate': case 'fromdateiso8601': return [Math.floor(Date.parse(input) / 1000)];
+    case 'now': return [Math.floor(Date.now() / 1000)];
     case 'round': return [Math.round(input)];
   }
   throw new JqError(`jq: error: ${node.name}/${a.length} is not defined`);
@@ -213,7 +263,14 @@ function format(v, { raw, compact, color }) {
 def('jq', c => {
   const flags = new Set();
   const rest = [];
-  for (const a of c.args) { if (/^-[rcesnaj]+$/.test(a)) for (const ch of a.slice(1)) flags.add(ch); else if (a === '--raw-output') flags.add('r'); else if (a === '--compact-output') flags.add('c'); else rest.push(a); }
+  VARS = { ENV: { ...(c.env || {}) } };
+  const argv = [];
+  for (let k = 0; k < c.args.length; k++) {
+    const a = c.args[k];
+    if (a === '--arg' || a === '--argjson') { const name = c.args[k + 1], v = c.args[k + 2]; k += 2; if (a === '--arg') VARS[name] = v; else { try { VARS[name] = JSON.parse(v); } catch { return c.fail(`jq: Invalid JSON text passed to --argjson`, 2); } } continue; }
+    argv.push(a);
+  }
+  for (const a of argv) { if (/^-[rcesnaj]+$/.test(a)) for (const ch of a.slice(1)) flags.add(ch); else if (a === '--raw-output') flags.add('r'); else if (a === '--compact-output') flags.add('c'); else rest.push(a); }
   const filter = rest.shift() ?? '.';
   let text;
   try { text = flags.has('n') ? 'null' : rest.length ? rest.map(p => fsx(c).read(p)).join('\n') : (c.stdin ?? ''); } catch (e) { return c.fail(e.message.replace(/^jq: /, 'jq: error: Could not open '), 2); }

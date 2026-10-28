@@ -115,7 +115,7 @@ def(['nslookup', 'host'], c => {
 const CURL_ERR = { ENOTFOUND: [6, h => `Could not resolve host: ${h}`], ECONNREFUSED: [7, (h, p) => `Failed to connect to ${h} port ${p} after 0 ms: Couldn't connect to server`], ETIMEDOUT: [28, (h, p) => `Failed to connect to ${h} port ${p} after 10002 ms: Timeout was reached`], EHOSTUNREACH: [7, (h, p) => `Failed to connect to ${h} port ${p} after 3061 ms: No route to host`], EMPTY: [52, () => 'Empty reply from server'], RESET: [56, () => 'Recv failure: Connection reset by peer'], BADURL: [3, () => 'URL rejected: Malformed input to a URL function'] };
 
 def('curl', c => {
-  const o = opts(c.args, { bool: ['-s', '-S', '-f', '-i', '-I', '-L', '-k', '-v', '-sS', '--fail', '--silent', '--include', '--head', '--location', '--insecure', '--verbose', '-fsS', '-sf', '-fs'], val: ['-X', '-H', '-d', '-o', '-w', '-u', '--data', '--header', '--request', '--connect-timeout', '-m', '--max-time', '--data-raw', '-A', '--json'], alias: { '--fail': '-f', '--silent': '-s', '--include': '-i', '--head': '-I', '--location': '-L', '--insecure': '-k', '--verbose': '-v', '--request': '-X', '--data': '-d', '--data-raw': '-d', '--header': '-H' } });
+  const o = opts(c.args, { bool: ['-s', '-S', '-f', '-i', '-I', '-L', '-k', '-v', '-sS', '--fail', '--silent', '--include', '--head', '--location', '--insecure', '--verbose', '-fsS', '-sf', '-fs'], val: ['--retry', '--retry-delay', '--data-binary', '-X', '-H', '-d', '-o', '-w', '-u', '--data', '--header', '--request', '--connect-timeout', '-m', '--max-time', '--data-raw', '-A', '--json'], alias: { '--fail': '-f', '--silent': '-s', '--include': '-i', '--head': '-I', '--location': '-L', '--insecure': '-k', '--verbose': '-v', '--request': '-X', '--data': '-d', '--data-raw': '-d', '--header': '-H' } });
   // collect repeated -H
   const headers = {};
   for (let i = 0; i < c.args.length; i++) if (c.args[i] === '-H' || c.args[i] === '--header') { const [k, ...v] = c.args[i + 1].split(':'); headers[k.trim()] = v.join(':').trim(); }
@@ -125,14 +125,25 @@ def('curl', c => {
   const url = o._[0];
   if (!url) return c.fail("curl: try 'curl --help' or 'curl --manual' for more information", 2);
   let method = o['-X'] || (head ? 'HEAD' : (o['-d'] !== undefined || o['--json'] !== undefined) ? 'POST' : 'GET');
-  let body = o['-d'] ?? o['--json'] ?? '';
+  let body = o['-d'] ?? o['--data-binary'] ?? o['--json'] ?? '';
+  if (o['--data-binary'] !== undefined && method === 'GET') method = 'POST';
+  if (typeof body === 'string' && body.startsWith('@')) {
+    if (body === '@-') body = String(c.stdin ?? '');
+    else { const t = c.host.files.get(c.resolve(body.slice(1))); if (t === undefined) { c.eprint(`Warning: Couldn't read data from file "${body.slice(1)}", this makes an empty POST.`); body = ''; } else body = o['-d'] !== undefined ? t.replace(/\r?\n/g, '') : t; }
+  }
+  let retries = Number(o['--retry'] || 0);
   if (o['--json'] !== undefined) headers['Content-Type'] = 'application/json';
   let target = url, res, hops = 0;
   const u0 = parseUrl(url);
   if (verbose) c.eprint(`*   Trying ${c.uni.resolveName(u0?.host, c.host) || u0?.host}:${u0?.port}...`);
   while (true) {
     res = httpRequest(c.uni, c.host, target, { method: method === 'HEAD' ? 'GET' : method, headers, body, insecure });
-    c.uni.emit({ type: 'http', host: c.host.name, url: target, method, status: res.status ?? null, error: res.error || null });
+    c.uni.emit({ type: 'http', host: c.host.name, url: target, method, status: res.status ?? null, error: res.error || null, retry: retries });
+    if (retries > 0 && (['ETIMEDOUT', 'ECONNREFUSED', 'RESET', 'EMPTY'].includes(res.error) || [408, 429, 500, 502, 503, 504].includes(res.status))) {
+      const delay = Number(o['--retry-delay'] || 1);
+      if (!silent) c.eprint(`Warning: Problem : ${res.error ? 'timeout' : 'HTTP error'}. Will retry in ${delay} second${delay === 1 ? '' : 's'}. ${retries} ${retries === 1 ? 'retry' : 'retries'} left.`);
+      retries--; c.uni.advance(delay); continue;
+    }
     if (!res.error && follow && [301, 302, 303, 307, 308].includes(res.status) && res.headers?.location && hops < 10) {
       if (incl || head) { c.print(`HTTP/1.1 ${res.status} ${reason(res.status)}`, `Location: ${res.headers.location}`, ''); }
       const loc = res.headers.location;
