@@ -566,6 +566,11 @@ button { font: inherit; color: inherit; }
 .sandbox-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; }
 .sandbox-grid .term, .sandbox-grid .panel { height: calc(100vh - var(--topbar-h) - 170px); min-height: 480px; }
 .scenario-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.move-progress { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); }
+.progress-code { width: 100%; box-sizing: border-box; resize: vertical; font: 12.5px/1.5 var(--font-mono); color: var(--text); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 10px 12px; word-break: break-all; }
+.move-msg { margin-top: 10px; color: var(--text-2); }
+.move-msg .move-err { color: var(--bad); }
+.confirm-box.move-confirm { border-color: var(--line-strong); background: var(--surface-2); }
 .confirm-box { border: 1px solid var(--bad); background: var(--bad-soft); padding: 14px; border-radius: var(--radius-sm); display: grid; gap: 10px; justify-items: start; }
 
 /* ---------- responsive ---------- */

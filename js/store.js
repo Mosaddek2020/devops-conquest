@@ -213,4 +213,43 @@ export function resetAll() {
   save();
 }
 
-export function exportProgress() { return JSON.stringify(state); }
+// A progress code is the state as base64 JSON behind the storage key, so it can be pasted into
+// another browser (or between the Artifact and the public site) without any file download.
+export function exportProgress() {
+  return `${KEY}:${btoa(unescape(encodeURIComponent(JSON.stringify(state))))}`;
+}
+
+export function parseProgress(code) {
+  const text = String(code || '').trim();
+  if (!text.startsWith(KEY + ':')) throw new Error('That is not a progress code from this course.');
+  let data;
+  try { data = JSON.parse(decodeURIComponent(escape(atob(text.slice(KEY.length + 1))))); } catch { throw new Error('The code is damaged: copy it again in full.'); }
+  if (!data || typeof data !== 'object' || typeof data.xp !== 'number' || typeof data.lessons !== 'object') throw new Error('The code is damaged: copy it again in full.');
+  return { ...blank(), ...data };
+}
+
+const union = (a = [], b = []) => [...new Set([...a, ...b])];
+
+// merge keeps the best of both: every lesson's furthest progress, all badges and days, the higher XP
+export function importProgress(data, mode = 'merge') {
+  if (mode === 'replace') { state = { ...blank(), ...data }; save(); return; }
+  const lessons = { ...state.lessons };
+  for (const [id, b] of Object.entries(data.lessons)) {
+    const a = lessons[id];
+    lessons[id] = !a ? b : {
+      ...a, ...b,
+      lenses: union(a.lenses, b.lenses), learned: a.learned || b.learned, lab: a.lab || b.lab,
+      quizBest: Math.max(a.quizBest || 0, b.quizBest || 0), quizTries: Math.max(a.quizTries || 0, b.quizTries || 0),
+      mastered: a.mastered || b.mastered,
+    };
+  }
+  const missed = { ...data.missed, ...state.missed };
+  state = {
+    ...data, ...state, lessons, missed,
+    xp: Math.max(state.xp, data.xp),
+    badges: union(state.badges, data.badges), days: union(state.days, data.days).sort(), testedOut: union(state.testedOut, data.testedOut),
+    started: Math.min(state.started || Date.now(), data.started || Date.now()),
+    sandboxCount: Math.max(state.sandboxCount || 0, data.sandboxCount || 0), reviewed: Math.max(state.reviewed || 0, data.reviewed || 0),
+  };
+  save();
+}

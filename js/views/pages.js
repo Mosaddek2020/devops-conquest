@@ -12,7 +12,7 @@ import { buildLabWorld } from '../lab.js';
 import { SCENARIOS } from '../content/sandbox.js';
 import {
   isMastered, isUnlocked, realmProgress, realmUnlocked, lessonState, currentLessonId, getState, RANKS, rankFor, nextRank,
-  BADGES, testOutRealm, resetAll, clearMissed, bumpSandbox, grant, PASS_MARK,
+  BADGES, testOutRealm, resetAll, exportProgress, parseProgress, importProgress, clearMissed, bumpSandbox, grant, PASS_MARK,
 } from '../store.js';
 
 function lessonRow(l) {
@@ -187,6 +187,36 @@ export function renderProfile() {
   for (const b of allBadges) badges.append(h('div', { class: 'badge' + (st.badges.includes(b.id) ? '' : ' is-off') }, h('span', { class: 'bt' }, b.title), h('span', { class: 'bd' }, b.desc)));
   page.append(h('h2', { style: { fontSize: 'var(--step-2)', margin: '32px 0 12px' } }, 'Badges'), badges);
   page.append(h('h2', { style: { fontSize: 'var(--step-2)', margin: '32px 0 12px' } }, 'Ranks'), ladder);
+
+  // move progress between browsers (or between the Artifact and the public site): a code, not a file,
+  // because sandboxed viewers block downloads
+  const move = h('section', { class: 'move-progress' },
+    h('h2', { style: { fontSize: 'var(--step-1)', marginBottom: '8px' } }, 'Move your progress'),
+    h('p', { style: { color: 'var(--text-2)' } }, 'Progress lives in this browser only. Copy your progress code here and load it in another browser or on another copy of the course.'));
+  const codeBox = h('textarea', { class: 'progress-code', rows: '3', spellcheck: 'false', 'aria-label': 'Progress code', placeholder: 'Paste a progress code here to load it' });
+  const moveMsg = h('div', { class: 'move-msg', 'aria-live': 'polite' });
+  const copyBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+    codeBox.value = exportProgress();
+    codeBox.select();
+    clear(moveMsg);
+    try { await navigator.clipboard.writeText(codeBox.value); toast('Progress code copied'); }
+    catch { moveMsg.append(h('span', {}, 'The code is selected above: copy it with Ctrl+C (or ⌘C).')); }
+  } }, 'Copy my progress code');
+  const loadBtn = h('button', { class: 'btn', type: 'button', onclick: () => {
+    clear(moveMsg);
+    let data;
+    try { data = parseProgress(codeBox.value); } catch (e) { moveMsg.append(h('span', { class: 'move-err' }, e.message)); return; }
+    const count = s => { const n = Object.values(s.lessons).filter(l => l.mastered).length; return `${n} mastered lesson${n === 1 ? '' : 's'}`; };
+    const done = mode => { importProgress(data, mode); toast(mode === 'merge' ? 'Progress merged' : 'Progress replaced'); location.hash = '#/profile'; window.dispatchEvent(new HashChangeEvent('hashchange')); };
+    moveMsg.append(h('div', { class: 'confirm-box move-confirm' },
+      h('strong', {}, `This code holds ${count(data)} and ${data.xp} XP.`),
+      h('span', {}, `This browser has ${count(getState())} and ${getState().xp} XP. Merge keeps the furthest progress from both; replace discards this browser's progress.`),
+      h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => done('merge') }, 'Merge'),
+        h('button', { class: 'btn', type: 'button', onclick: () => done('replace') }, 'Replace'))));
+  } }, 'Load a code');
+  move.append(codeBox, h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' } }, copyBtn, loadBtn), moveMsg);
+  page.append(move);
 
   // reset
   const danger = h('section', { style: { marginTop: '40px', paddingTop: '20px', borderTop: '1px solid var(--line)' } }, h('h2', { style: { fontSize: 'var(--step-1)', marginBottom: '8px' } }, 'Start over'));
