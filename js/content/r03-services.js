@@ -15,6 +15,25 @@ app.listen(PORT, '${bind}', () => console.log(\`notes \${VERSION} listening on \
 const tarball = files => 'TAR1' + JSON.stringify(files);
 const release = (version, extra) => tarball({ 'server.js': notesApp(version, { extra }), 'package.json': JSON.stringify({ name: 'notes', version, dependencies: { express: '^4.21.1' } }) + '\n', 'node_modules/express/package.json': '{"name":"express","version":"4.21.1"}\n' });
 
+
+// ---------- service hardening ----------
+const SHOP_SRC = `const express = require('express');
+const fs = require('fs');
+const app = express();
+const PORT = process.env.PORT || 3000;
+const sessions = fs.openSync('/var/lib/shop/sessions.db', 'a');
+const cache = [];   // TODO(#812): entries are never evicted
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/', (req, res) => { cache.push(Buffer.alloc(65536)); res.send('Lumen shop'); });
+app.listen(PORT, () => console.log(\`shop listening on \${PORT}\`));
+`;
+const SHOP_UNIT = '[Unit]\nDescription=Lumen shop\nAfter=network.target\n\n[Service]\nExecStart=/usr/bin/node /opt/shop/server.js\nWorkingDirectory=/opt/shop\n\n[Install]\nWantedBy=multi-user.target\n';
+const OVERRIDE = lines => text => text.replace(/(### Anything between[^\n]*\n)[\s\S]*?(### Edits below)/, `$1\n[Service]\n${lines.join('\n')}\n\n$2`);
+const effSvc = t => { const h = t.host('web1'); const base = h.files.get('/etc/systemd/system/shop.service') || ''; const drops = [...h.files.keys()].filter(p => p.startsWith('/etc/systemd/system/shop.service.d/') && p.endsWith('.conf')).sort().map(p => h.files.get(p)).join('\n'); const out = {}; let inSvc = false; for (const raw of (base + '\n' + drops).split('\n')) { const l = raw.trim(); if (/^\[/.test(l)) { inSvc = l === '[Service]'; continue; } const m = l.match(/^(\w+)\s*=\s*(.*)$/); if (inSvc && m) out[m[1]] = m[2]; } return out; };
+const hasDropin = (t, re) => [...t.host('web1').files.keys()].some(p => p.startsWith('/etc/systemd/system/shop.service.d/') && re.test(t.file('web1', p) || ''));
+const shopProc = t => { const st = t.unit('web1', 'shop'); return st.pid ? t.host('web1').procs.get(st.pid) : null; };
+const healthy = t => { const r = t.http('web1', 'http://localhost:3000/health'); return r.status === 200; };
+
 const NOTES_UNIT = `[Unit]
 Description=Lumen notes API
 After=network.target
@@ -214,6 +233,44 @@ export default {
         { type: 'multi', q: 'How do you make sure a nightly backup really works?', choices: ['Send its output to a log you check or monitor', 'Alert when no successful run was reported in the last ~26 hours', 'Regularly test restoring a backup', 'Trust it because it is in the crontab'], answer: [0, 1, 2], explain: 'A backup you never restored is a hope.' },
         { type: 'type', q: 'Type the cron schedule (just the five fields) for "every 15 minutes".', accept: ['*/15 * * * *'], model: '*/15 * * * *', explain: '*/15 in the minute field.' },
         { type: 'tf', q: '`logrotate -d` changes nothing; it only shows what would happen.', answer: true, explain: 'Always dry-run new rotation configs.' },
+      ],
+    },
+    {
+      id: 'service-hardening',
+      title: 'Hardening and limiting services',
+      summary: 'Drop-ins with systemctl edit, User=, NoNewPrivileges, ProtectSystem=strict with ReadWritePaths, ProtectHome, PrivateTmp, systemd-analyze security, MemoryMax and the cgroup OOM killer, Restart=on-failure, systemctl show.',
+      minutes: 30,
+      lab: {
+        cwd: '~',
+        panels: ['system', 'files'],
+        systemHost: 'web1',
+        setup(H) {
+          H.server('web1', { packages: ['nodejs'] });
+          H.authorize('laptop', 'dev', 'web1', 'ubuntu');
+          H.user('web1', 'shop', { shell: '/usr/sbin/nologin', home: '/nonexistent', noHome: true });
+          H.mkdir('web1', '/opt/shop/node_modules/express');
+          H.write('web1', '/opt/shop/server.js', SHOP_SRC);
+          H.mkdir('web1', '/var/lib/shop', { mode: 0o755 });
+          H.service('web1', 'shop', SHOP_UNIT);
+          H.host('web1').leaks = { 'shop.service': 2.5 };
+        },
+        suggestions: ['ssh ubuntu@web1', 'systemctl status shop'],
+        tasks: [
+          { title: 'On `web1`, measure how exposed the shop service is with `systemd-analyze security shop`. Who does it run as?', solution: 'systemd-analyze security shop', test: ['ssh ubuntu@web1', 'systemctl status shop', 'systemd-analyze security shop'], check: t => t.events('systemd-analyze').some(e => e.host === 'web1' && e.unit === 'shop.service' && e.exposure >= 9) },
+          { title: 'Run it as the user `shop` with a drop-in (`sudo systemctl edit shop`), give that user the data directory it writes, restart, and check `/health` answers', hint: 'In the editor: `[Service]` then `User=shop`. The app opens `/var/lib/shop/sessions.db`: `sudo chown -R shop:shop /var/lib/shop`. If it fails, `journalctl -u shop -n 20` says why.', solution: 'sudo systemctl edit shop && sudo chown -R shop:shop /var/lib/shop && sudo systemctl restart shop && curl -s localhost:3000/health', test: [{ cmd: 'sudo systemctl edit shop', edit: OVERRIDE(['User=shop']) }, 'sudo systemctl restart shop; journalctl -u shop -n 8', 'sudo chown -R shop:shop /var/lib/shop && sudo systemctl restart shop', 'curl -s localhost:3000/health'], check: t => hasDropin(t, /^\s*User\s*=\s*shop\s*$/m) && t.active('web1', 'shop') && shopProc(t)?.user === 'shop' && healthy(t) },
+          { title: 'Sandbox it: `NoNewPrivileges=yes`, `ProtectSystem=strict` (allow writes only to `/var/lib/shop`), `ProtectHome=yes`, `PrivateTmp=yes`. Restart, make sure it still works, and get the exposure below 5', hint: 'Edit the drop-in again. Without `ReadWritePaths=/var/lib/shop` the journal shows EROFS.', solution: 'sudo systemctl edit shop && sudo systemctl restart shop && systemd-analyze security shop', test: [{ cmd: 'sudo systemctl edit shop', edit: OVERRIDE(['User=shop', 'NoNewPrivileges=yes', 'ProtectSystem=strict', 'ProtectHome=yes', 'PrivateTmp=yes']) }, 'sudo systemctl restart shop; journalctl -u shop -n 6', { cmd: 'sudo systemctl edit shop', edit: OVERRIDE(['User=shop', 'NoNewPrivileges=yes', 'ProtectSystem=strict', 'ReadWritePaths=/var/lib/shop', 'ProtectHome=yes', 'PrivateTmp=yes']) }, 'sudo systemctl restart shop && curl -s localhost:3000/health', 'systemd-analyze security shop'], check: t => { const s = effSvc(t); return /^(yes|true)$/i.test(s.NoNewPrivileges || '') && /^strict$/i.test(s.ProtectSystem || '') && /\/var\/lib\/shop/.test(s.ReadWritePaths || '') && /^(yes|true)$/i.test(s.ProtectHome || '') && /^(yes|true)$/i.test(s.PrivateTmp || '') && t.active('web1', 'shop') && healthy(t) && t.events('systemd-analyze').some(e => e.unit === 'shop.service' && e.exposure < 5); } },
+          { title: 'The shop leaks memory (watch `systemctl status shop`). Contain it: a 300 MB memory limit and automatic restarts after failures (5 seconds apart). Restart it, wait two minutes, and read the journal', hint: 'Add `MemoryMax=300M`, `Restart=on-failure` and `RestartSec=5` to the drop-in. Then `sleep 120; journalctl -u shop -n 15`.', solution: 'sudo systemctl edit shop && sudo systemctl restart shop && sleep 120 && journalctl -u shop -n 15', test: [{ cmd: 'sudo systemctl edit shop', edit: OVERRIDE(['User=shop', 'NoNewPrivileges=yes', 'ProtectSystem=strict', 'ReadWritePaths=/var/lib/shop', 'ProtectHome=yes', 'PrivateTmp=yes', 'MemoryMax=300M', 'Restart=on-failure', 'RestartSec=5']) }, 'sudo systemctl restart shop', 'sleep 120; journalctl -u shop -n 15'], check: t => { const s = effSvc(t); const st = t.unit('web1', 'shop'); return /^300M$/i.test(s.MemoryMax || '') && s.Restart === 'on-failure' && t.events('oom-kill').some(e => e.host === 'web1' && e.cgroup) && (st.nRestarts || 0) >= 1 && st.active === 'active'; } },
+          { title: 'Confirm what systemd applied with `systemctl show shop -p User,MemoryMax,NRestarts`. What would you alert on?', solution: 'systemctl show shop -p User,MemoryMax,MemoryCurrent,NRestarts', check: t => t.events('systemctl-show').some(e => e.unit === 'shop.service' && e.props.includes('MemoryMax') && e.props.includes('NRestarts')) },
+        ],
+      },
+      quiz: [
+        { type: 'mc', q: 'Why use `systemctl edit` (a drop-in) instead of editing /lib/systemd/system/shop.service?', choices: ['It is faster', 'Package upgrades overwrite the packaged unit; the drop-in in /etc survives and shows exactly what you changed', 'Drop-ins are encrypted', 'systemd ignores /lib'], answer: 1, explain: '`systemctl cat` shows the unit and its drop-ins.' },
+        { type: 'mc', q: 'After adding `ProtectSystem=strict`, the service fails with EROFS on /var/lib/shop/sessions.db. The fix?', choices: ['Remove the sandbox', 'Add ReadWritePaths=/var/lib/shop', 'chmod 777 /var/lib/shop', 'Run as root'], answer: 1, explain: 'Allow writes exactly where the service needs them.' },
+        { type: 'mc', q: 'What does `MemoryMax=300M` change when the service leaks memory?', choices: ['Nothing', 'The kernel kills the service inside its own cgroup at 300 MB, instead of the whole machine running out of memory', 'It adds swap', 'It slows the leak'], answer: 1, explain: 'Contained and predictable; Restart= brings it back.' },
+        { type: 'tf', q: 'A memory limit without `Restart=` can leave the service stopped after an OOM kill.', answer: true, explain: 'Pair limits with a restart policy, and alert on restarts.' },
+        { type: 'multi', q: 'Which settings reduce what a compromised service can do?', choices: ['User=shop', 'NoNewPrivileges=yes', 'ProtectSystem=strict', 'Restart=always'], answer: [0, 1, 2], explain: 'Restart= is about availability, not containment.' },
+        { type: 'mc', q: 'What does `systemd-analyze security shop` report?', choices: ['Open ports', 'An exposure score and the list of protections the unit lacks', 'CVEs in the binary', 'Firewall rules'], answer: 1, explain: 'Raise protections step by step and re-check.' },
+        { type: 'type', q: 'Type the command that shows the effective User and MemoryMax of the shop unit.', accept: ['systemctl show shop -p User,MemoryMax', 'systemctl show shop -p MemoryMax,User', 'systemctl show shop.service -p User,MemoryMax', 'systemctl show -p User,MemoryMax shop', 'systemctl show shop --property=User,MemoryMax'], model: 'systemctl show shop -p User,MemoryMax', explain: 'NRestarts and MemoryCurrent are useful too.' },
       ],
     },
     {

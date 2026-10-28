@@ -208,6 +208,10 @@ export class NodeApp {
     }
     for (const o of this.opens || []) {
       const p = normPath(o.path.startsWith('/') ? o.path : dirname(this.file) + '/' + o.path);
+      const sb = this.sandbox;
+      const inside = (x, d) => x === d || x.startsWith(d.replace(/\/$/, '') + '/');
+      const ro = sb && ((sb.protectSystem === 'strict' && !['/dev', '/proc', '/sys', '/run', '/tmp', '/var/tmp'].some(d => inside(p, d))) || (['yes', 'true', 'full'].includes(sb.protectSystem) && ['/usr', '/boot', '/efi', ...(sb.protectSystem === 'full' ? ['/etc'] : [])].some(d => inside(p, d))) || (sb.protectHome && ['/home', '/root', '/run/user'].some(d => inside(p, d)))) && !(sb.rw || []).some(d => inside(p, d));
+      if (ro) return { ok: false, code: 1, logs: ['node:fs:573', '  return binding.open(', '         ^', '', `Error: EROFS: read-only file system, open '${p}'`, `    at Object.${o.fn} (node:fs:573:18)`, `    at Object.<anonymous> (${this.file}:${o.line}:4)`, '    at Module._compile (node:internal/modules/cjs/loader:1469:14) {', '  errno: -30,', "  code: 'EROFS',", "  syscall: 'open',", `  path: '${p}'`, '}', '', 'Node.js v20.18.0'] };
       const h = this.host, st = h.stat(p) || h.stat(dirname(p));
       if (!st || this.user === 'root') continue;
       const bits = st.owner === this.user ? st.mode >> 6 : h.userGroups(this.user).includes(st.group) ? st.mode >> 3 : st.mode;
@@ -467,10 +471,11 @@ export function resolveProgram(host, argv, { cwd, env, user, uni }) {
 }
 
 // Start a program as a process. Returns { ok, code, logs, proc }.
-export function launch(host, argv, { uni, user = 'root', env = {}, cwd = '/', unit = null, logSink = null } = {}) {
+export function launch(host, argv, { uni, user = 'root', env = {}, cwd = '/', unit = null, logSink = null, sandbox = null } = {}) {
   const prog = resolveProgram(host, argv, { cwd, env, user, uni });
   if (!prog) return { ok: false, code: 127, logs: [], notProgram: true };
   if (prog.error) return { ok: false, code: prog.code || 1, logs: String(prog.error).split('\n') };
+  prog.sandbox = sandbox;
   if (prog.script !== undefined) return { ok: true, code: 0, logs: [], script: prog.script, oneShot: true };
   const r = prog.start();
   const logs = [...(prog.banner || []), ...(r.logs || [])];

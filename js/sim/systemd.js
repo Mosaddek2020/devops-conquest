@@ -33,6 +33,13 @@ function findUnitFile(host, name) {
   return null;
 }
 
+// drop-ins: /etc/systemd/system/<unit>.d/*.conf, applied after the unit file
+export function dropinFiles(host, name) { const d = `/etc/systemd/system/${name}.d/`; return [...host.files.keys()].filter(p => p.startsWith(d) && p.endsWith('.conf') && !p.slice(d.length).includes('/')).sort(); }
+export function dropinText(host, name) { return dropinFiles(host, name).map(p => host.files.get(p)).join('\n'); }
+const effective = (host, st) => parseUnit((st.loadedText ?? '') + '\n' + (st.loadedDropins ?? dropinText(host, st.name)));
+export const sizeMB = v => { const m = String(v || '').match(/^([\d.]+)\s*([KMGT]?)$/i); if (!m) return null; return Number(m[1]) * ({ K: 1 / 1024, M: 1, G: 1024, T: 1048576 }[m[2].toUpperCase()] ?? 1 / 1048576); };
+const changedOnDisk = (host, st, path) => st.loadedText !== null && st.loadedText !== undefined && (host.files.get(path) !== st.loadedText || (st.loadedDropins !== undefined && st.loadedDropins !== dropinText(host, st.name)));
+
 function unitName(n) { return /\.(service|timer|socket|target)$/.test(n) ? n : n + '.service'; }
 
 export function unitState(host, name) {
@@ -62,8 +69,10 @@ export function startUnit(host, uni, name, { quiet = false } = {}) {
   if (st.active === 'active') return { ok: true };
   const text = host.files.get(path);
   st.loadedText = st.loadedText ?? text;
-  const unit = parseUnit(st.loadedText);
+  st.loadedDropins = st.loadedDropins ?? dropinText(host, name);
+  const unit = effective(host, st);
   const svc = unit.sections.Service || {};
+  st.memoryMax = sizeMB(svc.MemoryMax);
   const exec = svc.ExecStart;
   if (!exec) { st.active = 'failed'; return { ok: false, msg: `Failed to start ${name}: Unit ${name} has a bad unit file setting.`, code: 1 }; }
   const user = svc.User || 'root';
@@ -97,7 +106,9 @@ export function startUnit(host, uni, name, { quiet = false } = {}) {
     for (const p of s.ports) { try { host.listen(p.port, proc.pid, { addr: p.addr, program: prog }); } catch { host.killProc(proc.pid); return fail([`nginx: [emerg] bind() to 0.0.0.0:${p.port} failed (98: Address already in use)`, 'nginx: [emerg] still could not bind()']); } }
     r = { ok: true, proc, logs: [] };
   } else {
-    r = launch(host, argv, { uni, user, env: envr.env, cwd, unit: name, logSink: line => host.log(name, line) });
+    const yes = v => /^(yes|true|1|on)$/i.test(String(v || ''));
+    const sandbox = svc.ProtectSystem || yes(svc.ProtectHome) || svc.ReadWritePaths ? { protectSystem: yes(svc.ProtectSystem) ? 'yes' : (svc.ProtectSystem || '').toLowerCase(), protectHome: yes(svc.ProtectHome) || /read-only|tmpfs/.test(svc.ProtectHome || ''), rw: String(svc.ReadWritePaths || '').split(/\s+/).filter(Boolean).map(x => x.replace(/^-/, '')), privateTmp: yes(svc.PrivateTmp) } : null;
+    r = launch(host, argv, { uni, user, env: envr.env, cwd, unit: name, logSink: line => host.log(name, line), sandbox });
     if (!r.ok) {
       // the process started and then exited: for Type=simple, `systemctl start` still succeeds;
       // the failure shows up in status and the journal (and Restart= kicks in)
@@ -122,7 +133,7 @@ function scheduleRestart(host, uni, name, svc) {
   st.restarts = st.restarts.filter(t => now - t < 10).concat(now);
   if (st.restarts.length > 5) {
     host.log(name, `${name}: Start request repeated too quickly.`, 'warning');
-    host.log(name, `${name}: Failed with result 'exit-code'.`, 'warning');
+    host.log(name, `${name}: Failed with result '${st.result === 'oom-kill' ? 'oom-kill' : 'exit-code'}'.`, 'warning');
     st.result = 'start-limit-hit';
     st.pendingRestart = null;
     return;
@@ -142,18 +153,35 @@ export function stopUnit(host, uni, name) {
 
 // the systemd "ticker": restarts crashed services, notices processes that died
 export function installSystemdTicker(uni) {
-  uni.tickers.push(() => {
+  uni.tickers.push((step = 2) => {
     for (const host of uni.hosts.values()) {
       for (const st of host.units.values()) {
+        // a leaking service grows; past MemoryMax= the cgroup's OOM killer ends it
+        const lp = st.active === 'active' && st.pid && host.leaks?.[st.name] ? host.procs.get(st.pid) : null;
+        if (lp) {
+          lp.mem = (lp.mem || 30) + host.leaks[st.name] * step;
+          const hostFull = host.memUsedMB() > host.memMB * 0.97;
+          if ((st.memoryMax && lp.mem > st.memoryMax) || hostFull) {
+            const cg = !!st.memoryMax && lp.mem > st.memoryMax;
+            host.journal.push({ time: host.time, unit: 'kernel', prio: 'err', msg: cg ? `Memory cgroup out of memory: Killed process ${lp.pid} (${lp.cmd.split(' ')[0].split('/').pop()}) total-vm:${Math.round(lp.mem * 3200)}kB, anon-rss:${Math.round(lp.mem * 1024)}kB, file-rss:0kB, shmem-rss:0kB, UID:${host.users.get(lp.user)?.uid ?? 0} pgtables:1124kB oom_score_adj:0` : `Out of memory: Killed process ${lp.pid} (${lp.cmd.split(' ')[0].split('/').pop()}) total-vm:${Math.round(lp.mem * 3200)}kB, anon-rss:${Math.round(lp.mem * 1024)}kB, file-rss:0kB, shmem-rss:0kB, UID:${host.users.get(lp.user)?.uid ?? 0} pgtables:5012kB oom_score_adj:0` });
+            host.log(st.name, `${st.name}: A process of this unit has been killed by the OOM killer.`, 'warning');
+            host.log(st.name, `${st.name}: Main process exited, code=killed, status=9/KILL`, 'warning');
+            host.log(st.name, `${st.name}: Failed with result 'oom-kill'.`, 'warning');
+            host.killProc(lp.pid, 'KILL');
+            st.active = 'failed'; st.sub = 'failed'; st.result = 'oom-kill'; st.lastPid = st.pid; st.pid = null; st.since = host.time; st.oomKills = (st.oomKills || 0) + 1;
+            uni.emit({ type: 'oom-kill', host: host.name, unit: st.name, cgroup: cg });
+            scheduleRestart(host, uni, st.name, effective(host, st).sections.Service || {});
+          }
+        }
         if (st.active === 'active' && st.pid && !host.procs.has(st.pid) && st.sub === 'running') {
           host.log(st.name, `${st.name}: Main process exited, code=killed, status=9/KILL`, 'warning');
           st.active = 'failed'; st.sub = 'failed'; st.result = 'signal'; st.pid = null; st.since = host.time;
-          const text = st.loadedText || host.files.get(findUnitFile(host, st.name) || '') || '';
-          scheduleRestart(host, uni, st.name, parseUnit(text).sections.Service || {});
+          scheduleRestart(host, uni, st.name, effective(host, st).sections.Service || {});
         }
         if (st.pendingRestart && host.time >= st.pendingRestart) {
           st.pendingRestart = null;
           st.active = 'inactive';
+          st.nRestarts = (st.nRestarts || 0) + 1;
           startUnit(host, uni, st.name);
         }
       }
@@ -213,18 +241,19 @@ function statusText(host, uni, name) {
   const st = unitState(host, name);
   const path = findUnitFile(host, name);
   if (!path) return null;
-  const unit = parseUnit(st.loadedText ?? host.files.get(path));
+  const unit = st.loadedText !== null && st.loadedText !== undefined ? effective(host, st) : parseUnit(host.files.get(path) + '\n' + dropinText(host, name));
   const dot = st.active === 'active' ? C.green('●') : st.active === 'failed' ? C.red('×') : st.active === 'activating' ? C.yellow('●') : '○';
   const act = st.active === 'active' ? C.green(C.bold(`active (${st.sub})`)) : st.active === 'failed' ? C.red(C.bold(`failed`)) + ` (Result: ${st.result})` : st.active === 'activating' ? C.yellow(`activating (${st.sub})`) : `inactive (dead)`;
   const lines = [
     `${dot} ${name} - ${unit.sections.Unit?.Description || name}`,
     `     Loaded: loaded (${path}; ${st.enabled ? C.green('enabled') : 'disabled'}; preset: enabled)`,
+    ...(dropinFiles(host, name).length ? [`    Drop-In: /etc/systemd/system/${name}.d`, ...dropinFiles(host, name).map((p, i, a) => `             ${i === a.length - 1 ? '└─' : '├─'}${p.split('/').pop()}`)] : []),
     `     Active: ${act} since ${fmtDate(st.since, '%a %F %T')} UTC; ${Math.max(1, Math.round((host.time - st.since) / 60))}min ago`,
   ];
-  if (st.loadedText !== null && st.loadedText !== undefined && host.files.get(path) !== st.loadedText) lines.splice(2, 0, `     ${C.yellow('Warning:')} The unit file, source configuration file or drop-ins of ${name} changed on disk. Run 'systemctl daemon-reload' to reload units.`);
+  if (changedOnDisk(host, st, path)) lines.splice(2, 0, `     ${C.yellow('Warning:')} The unit file, source configuration file or drop-ins of ${name} changed on disk. Run 'systemctl daemon-reload' to reload units.`);
   if (st.pid && host.procs.has(st.pid)) {
     const p = host.procs.get(st.pid);
-    lines.push(`   Main PID: ${st.pid} (${p.cmd.split(' ')[0].split('/').pop().replace(':', '')})`, `      Tasks: ${1 + [...host.procs.values()].filter(x => x.ppid === st.pid).length}`, `     Memory: ${(p.mem || 10).toFixed(1)}M`, `     CGroup: /system.slice/${name}`, `             └─${st.pid} ${p.cmd}`);
+    lines.push(`   Main PID: ${st.pid} (${p.cmd.split(' ')[0].split('/').pop().replace(':', '')})`, `      Tasks: ${1 + [...host.procs.values()].filter(x => x.ppid === st.pid).length}`, `     Memory: ${(p.mem || 10).toFixed(1)}M${st.memoryMax ? ` (max: ${st.memoryMax.toFixed(1)}M available: ${Math.max(0, st.memoryMax - (p.mem || 10)).toFixed(1)}M)` : ''}`, `     CGroup: /system.slice/${name}`, `             └─${st.pid} ${p.cmd}`);
   } else if (st.active === 'failed') lines.push(`    Process: ${st.lastPid || 4242} ExecStart=${unit.sections.Service?.ExecStart} (code=exited, status=${st.exitCode ?? 1}/FAILURE)`, `   Main PID: ${st.lastPid || 4242} (code=exited, status=${st.exitCode ?? 1}/FAILURE)`);
   const logs = host.journal.filter(j => j.unit === name).slice(-10);
   if (logs.length) { lines.push(''); for (const j of logs) lines.push(journalLine(host, j)); }
@@ -239,7 +268,7 @@ function journalLine(host, j) {
 }
 
 def('systemctl', c => {
-  const o = opts(c.args, { bool: ['--now', '--failed', '--all', '-a', '--no-pager', '-l', '--quiet', '-q', '--full', '--user'], val: ['--type', '-t', '--state'] });
+  const o = opts(c.args, { bool: ['--now', '--failed', '--all', '-a', '--no-pager', '-l', '--quiet', '-q', '--full', '--user', '--value'], val: ['--type', '-t', '--state', '-p', '--property'] });
   const [sub, ...rest] = o._;
   const host = c.host, uni = c.uni;
   if (host.kind === 'container') return c.fail('System has not been booted with systemd as init system (PID 1). Can\'t operate.\nFailed to connect to bus: Host is down', 1);
@@ -265,7 +294,7 @@ def('systemctl', c => {
     }
     case 'daemon-reload':
       if (needRoot(c, 'reload daemon') !== null) return 1;
-      for (const st of host.units.values()) { const p = findUnitFile(host, st.name); if (p) st.loadedText = host.files.get(p); }
+      for (const st of host.units.values()) { const p = findUnitFile(host, st.name); if (p) { st.loadedText = host.files.get(p); st.loadedDropins = dropinText(host, st.name); } }
       uni.emit({ type: 'daemon-reload', host: host.name });
       return 0;
     case 'start': case 'stop': case 'restart': case 'reload': case 'try-restart': case 'reload-or-restart': {
@@ -276,7 +305,8 @@ def('systemctl', c => {
         if (!findUnitFile(host, n)) { c.eprint(`Failed to ${sub} ${n}: Unit ${n} not found.`); code = 5; continue; }
         const st = unitState(host, n);
         const fileText = host.files.get(findUnitFile(host, n));
-        if (st.loadedText !== null && st.loadedText !== undefined && st.loadedText !== fileText) c.eprint(`${C.yellow('Warning:')} The unit file, source configuration file or drop-ins of ${n} changed on disk. Run 'systemctl daemon-reload' to reload units.`);
+        void fileText;
+        if (changedOnDisk(host, st, findUnitFile(host, n))) c.eprint(`${C.yellow('Warning:')} The unit file, source configuration file or drop-ins of ${n} changed on disk. Run 'systemctl daemon-reload' to reload units.`);
         if (sub === 'stop') { stopUnit(host, uni, n); continue; }
         if (sub === 'reload') {
           const proc = st.pid && host.procs.get(st.pid);
@@ -323,19 +353,86 @@ def('systemctl', c => {
     case 'is-enabled': { const st = unitState(host, names[0]); c.print(findUnitFile(host, names[0]) ? (st.enabled ? 'enabled' : 'disabled') : 'not-found'); return st.enabled ? 0 : 1; }
     case 'is-failed': { const st = unitState(host, names[0]); c.print(st.active === 'failed' ? 'failed' : st.active); return st.active === 'failed' ? 0 : 1; }
     case 'cat': {
-      for (const n of names) { const p = findUnitFile(host, n); if (!p) return c.fail(`No files found for ${n}.`, 1); c.print(C.blue(`# ${p}`), ...host.files.get(p).replace(/\n$/, '').split('\n')); }
+      for (const n of names) { const p = findUnitFile(host, n); if (!p) return c.fail(`No files found for ${n}.`, 1); c.print(C.blue(`# ${p}`), ...host.files.get(p).replace(/\n$/, '').split('\n')); for (const d of dropinFiles(host, n)) c.print('', C.blue(`# ${d}`), ...host.files.get(d).replace(/\n$/, '').split('\n')); }
       return 0;
     }
     case 'show': {
       const st = unitState(host, names[0]);
-      c.print(`ActiveState=${st.active}`, `SubState=${st.sub}`, `MainPID=${st.pid || 0}`, `UnitFileState=${st.enabled ? 'enabled' : 'disabled'}`, `Result=${st.result}`);
+      const svc = (findUnitFile(host, names[0]) ? (st.loadedText !== null && st.loadedText !== undefined ? effective(host, st) : parseUnit(host.files.get(findUnitFile(host, names[0])) + '\n' + dropinText(host, names[0]))) : { sections: {} }).sections.Service || {};
+      const p = st.pid && host.procs.get(st.pid);
+      const props = { Id: names[0], ActiveState: st.active, SubState: st.sub, Result: st.result, MainPID: st.pid || 0, UnitFileState: st.enabled ? 'enabled' : 'disabled', User: svc.User || '', Restart: svc.Restart || 'no', RestartUSec: svc.RestartSec ? `${parseFloat(svc.RestartSec)}s` : '100ms', NRestarts: st.nRestarts || 0, MemoryCurrent: p ? Math.round((p.mem || 10) * 1048576) : '[not set]', MemoryMax: st.memoryMax ?? sizeMB(svc.MemoryMax) ? Math.round((st.memoryMax ?? sizeMB(svc.MemoryMax)) * 1048576) : 'infinity', CPUQuotaPerSecUSec: svc.CPUQuota ? `${parseFloat(svc.CPUQuota) * 10}ms` : 'infinity', NoNewPrivileges: /^(yes|true)$/i.test(svc.NoNewPrivileges || '') ? 'yes' : 'no', ProtectSystem: svc.ProtectSystem || 'no', ProtectHome: svc.ProtectHome || 'no', PrivateTmp: /^(yes|true)$/i.test(svc.PrivateTmp || '') ? 'yes' : 'no', ReadWritePaths: svc.ReadWritePaths || '', DropInPaths: dropinFiles(host, names[0]).join(' ') };
+      const want = (o['-p'] || o['--property'] || '').split(',').filter(Boolean);
+      const keys = want.length ? want : Object.keys(props);
+      for (const k of keys) c.print(o['--value'] ? String(props[k] ?? '') : `${k}=${props[k] ?? ''}`);
+      uni.emit({ type: 'systemctl-show', host: host.name, unit: names[0], props: keys });
       return 0;
     }
-    case 'edit': return c.fail(C.dim(`(the simulator does not open drop-in editors: edit the unit file with sudo nano /etc/systemd/system/${names[0]}, then sudo systemctl daemon-reload)`), 1);
+    case 'edit': {
+      if (!names.length) return c.fail('Too few arguments.', 1);
+      if (c.user !== 'root') return c.fail('Failed to edit unit: Access denied', 1);
+      const n = names[0];
+      if (!findUnitFile(host, n)) return c.fail(`No files found for ${n}.`, 1);
+      const path = `/etc/systemd/system/${n}.d/override.conf`;
+      const cur = host.files.get(path) || '';
+      const body = host.files.get(findUnitFile(host, n)).replace(/\n$/, '').split('\n').map(l => `# ${l}`).join('\n');
+      c.result.editor = {
+        title: `/etc/systemd/system/${n}.d/.#override.conf`,
+        content: `### Editing ${path}\n### Anything between here and the comment below will become the contents of the drop-in file\n\n${cur.replace(/\n$/, '')}\n\n### Edits below this comment will be discarded\n\n### ${findUnitFile(host, n)}\n${body}\n`,
+        onSave(text, { io }) {
+          const keep = text.split('### Edits below this comment will be discarded')[0].split('\n').filter(l => !l.startsWith('###')).join('\n').trim();
+          if (!keep) { io.out(''); return 0; }
+          host.mkdirMeta(`/etc/systemd/system/${n}.d`, 'root');
+          host.writeSys(path, keep + '\n');
+          const st = unitState(host, n);
+          st.loadedText = host.files.get(findUnitFile(host, n)); st.loadedDropins = dropinText(host, n);
+          uni.emit({ type: 'systemctl-edit', host: host.name, unit: n, text: keep });
+          return 0;
+        },
+      };
+      return 0;
+    }
     case 'reboot': case 'poweroff': return c.fail(C.dim('(rebooting is disabled in the simulator)'), 1);
   }
   return c.fail(`Unknown command verb '${sub}'.`, 1);
 });
+
+// systemd-analyze security: how much of the system a service could reach if it were compromised
+const HARDENING = [
+  ['User=/DynamicUser=', svc => svc.User && svc.User !== 'root' || /^(yes|true)$/i.test(svc.DynamicUser || ''), 2.0, 'Service runs as root user', 'Service runs under a static non-root user identity'],
+  ['NoNewPrivileges=', svc => /^(yes|true)$/i.test(svc.NoNewPrivileges || ''), 1.0, 'Service processes may acquire new privileges', 'Service processes cannot acquire new privileges'],
+  ['ProtectSystem=', svc => /^(strict)$/i.test(svc.ProtectSystem || '') ? 1 : /^(full|yes|true)$/i.test(svc.ProtectSystem || '') ? 0.6 : 0, 1.5, 'Service has full access to the OS file hierarchy', 'Service has strict read-only access to the OS file hierarchy'],
+  ['ProtectHome=', svc => /^(yes|true|read-only|tmpfs)$/i.test(svc.ProtectHome || ''), 0.8, 'Service has full access to home directories', 'Service has no access to home directories'],
+  ['PrivateTmp=', svc => /^(yes|true)$/i.test(svc.PrivateTmp || ''), 0.6, 'Service has access to other software\'s temporary files', 'Service has no access to other software\'s temporary files'],
+  ['PrivateDevices=', svc => /^(yes|true)$/i.test(svc.PrivateDevices || ''), 0.6, 'Service potentially has access to hardware devices', 'Service has no access to hardware devices'],
+  ['ProtectKernelTunables=', svc => /^(yes|true)$/i.test(svc.ProtectKernelTunables || ''), 0.5, 'Service may alter kernel tunables', 'Service cannot alter kernel tunables (/proc/sys, …)'],
+  ['ProtectKernelModules=', svc => /^(yes|true)$/i.test(svc.ProtectKernelModules || ''), 0.5, 'Service may load or read kernel modules', 'Service cannot load or read kernel modules'],
+  ['ProtectControlGroups=', svc => /^(yes|true)$/i.test(svc.ProtectControlGroups || ''), 0.4, 'Service may modify the control group file system', 'Service cannot modify the control group file system'],
+  ['RestrictSUIDSGID=', svc => /^(yes|true)$/i.test(svc.RestrictSUIDSGID || ''), 0.3, 'Service may create SUID/SGID files', 'SUID/SGID file creation by service is restricted'],
+  ['CapabilityBoundingSet=', svc => svc.CapabilityBoundingSet !== undefined && !/CAP_SYS_ADMIN/.test(svc.CapabilityBoundingSet), 0.8, 'Service may hold any capability (CAP_SYS_ADMIN, CAP_NET_ADMIN, …)', 'Service has a restricted capability bounding set'],
+];
+export function exposure(svc) { let got = 0; for (const [, test, w] of HARDENING) got += Number(test(svc)) * w; return Math.max(0.6, +(9.6 - got).toFixed(1)); }
+const levelOf = x => x < 2 ? 'OK 🙂' : x < 5 ? 'MEDIUM 😐' : x < 7 ? 'EXPOSED 🙁' : 'UNSAFE 😨';
+
+def('systemd-analyze', c => {
+  const [sub, unit] = c.args.filter(a => !a.startsWith('-'));
+  const host = c.host;
+  if (sub !== 'security') return c.fail(C.dim('(the simulator implements systemd-analyze security [UNIT])'), 1);
+  const svcOf = n => { const st = unitState(host, n); const p = findUnitFile(host, n); if (!p) return null; return (st.loadedText !== null && st.loadedText !== undefined ? effective(host, st) : parseUnit(host.files.get(p) + '\n' + dropinText(host, n))).sections.Service || {}; };
+  if (!unit) {
+    c.print('UNIT                                 EXPOSURE PREDICATE HAPPY');
+    for (const st of host.units.values()) { const svc = svcOf(st.name); if (!svc || !st.name.endsWith('.service')) continue; const x = exposure(svc); c.print(`${st.name.padEnd(36)} ${x.toFixed(1).padStart(8)} ${levelOf(x).split(' ')[0].padEnd(9)} ${levelOf(x).split(' ')[1]}`); }
+    return 0;
+  }
+  const n = unitName(unit);
+  const svc = svcOf(n);
+  if (!svc) return c.fail(`Failed to get unit file state for ${n}: No such file or directory`, 1);
+  c.print('  NAME                         DESCRIPTION                                                        EXPOSURE');
+  for (const [name, test, w, bad, good] of HARDENING) { const v = Number(test(svc)); c.print(`${v >= 1 ? C.green('✓') : C.red('✗')} ${name.padEnd(28)} ${(v >= 1 ? good : bad).padEnd(66)} ${v >= 1 ? '' : (w * (1 - v)).toFixed(1)}`.trimEnd()); }
+  const x = exposure(svc);
+  c.print('', `→ Overall exposure level for ${n}: ${x.toFixed(1)} ${levelOf(x)}`);
+  c.uni.emit({ type: 'systemd-analyze', host: host.name, unit: n, exposure: x });
+  return 0;
+}, { always: true });
 
 def('service', c => {
   const [name, action] = c.args;
