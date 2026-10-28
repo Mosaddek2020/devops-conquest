@@ -5,6 +5,11 @@ import { kubeconfigText } from '../sim/kubectl.js';
 import { UBUNTU_AMI } from '../sim/cloud.js';
 import { makeCertPem } from '../sim/net.js';
 import { pmOk, inc } from './r10-reliability.js';
+import { kustomizeBuild, mapFiles } from '../sim/kustomize.js';
+import { parseYaml } from '../git/yaml.js';
+import { authorize, saIdentity } from '../sim/rbac.js';
+import { evaluate, policiesFor } from '../sim/kyverno.js';
+import { monthlyRunRate } from '../sim/finops.js';
 
 const REG = 'registry.lumen.dev';
 const TOKEN = ['lmn', 'ci', '7f3a9c2e5b81'].join('-');
@@ -157,6 +162,25 @@ const oncallWorld = H => {
   });
   H.uni.advance(900);
 };
+
+
+// ---------- trial: the GitOps migration ----------
+const TICKETS = v => `const express = require('express');\nconst app = express();\nconst PORT = process.env.PORT || 3000;\napp.get('/health', (req, res) => res.json({ status: 'ok' }));\napp.get('/ready', (req, res) => res.json({ ready: true }));\napp.get('/', (req, res) => res.send('Lumen tickets ${v}'));\napp.listen(PORT, () => console.log('tickets ${v} listening on ' + PORT));\n`;
+const TICKETS_FILES = v => ({ 'server.js': TICKETS(v), 'package.json': JSON.stringify({ name: 'tickets', version: v, dependencies: { express: '^4.21.1' } }, null, 2) + '\n', 'package-lock.json': JSON.stringify({ name: 'tickets', lockfileVersion: 3, packages: { 'node_modules/express': { version: '4.21.1' } } }, null, 2) + '\n', Dockerfile: 'FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci --omit=dev\nCOPY . .\nUSER node\nCMD ["node", "server.js"]\n' });
+const T_DEP = `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: tickets\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: tickets\n  template:\n    metadata:\n      labels:\n        app: tickets\n    spec:\n      containers:\n        - name: tickets\n          image: ghcr.io/lumen/tickets:1.0.0\n          ports:\n            - name: http\n              containerPort: 3000\n          readinessProbe:\n            httpGet:\n              path: /ready\n              port: http\n            periodSeconds: 5\n          resources:\n            requests:\n              cpu: 50m\n              memory: 64Mi\n            limits:\n              memory: 128Mi\n`;
+const T_SVC = 'apiVersion: v1\nkind: Service\nmetadata:\n  name: tickets\nspec:\n  selector:\n    app: tickets\n  ports:\n    - port: 80\n      targetPort: http\n';
+const T_DEPLOY_WF = 'name: deploy\non:\n  push:\n    branches: [main]\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Deploy with an admin kubeconfig\n        run: |\n          mkdir -p ~/.kube\n          echo "${{ secrets.KUBECONFIG_DATA }}" > ~/.kube/config\n          kubectl apply -n tickets -f k8s/\n';
+const T_BUILD_WF = 'name: build\non:\n  push:\n    branches: [main]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: echo "build and push ghcr.io/lumen/tickets (the image build is simulated)"\n';
+const gitTree = (t, slug, branch = 'main') => { const h = t.remote(slug)?.refs['refs/heads/' + branch]; if (!h) return {}; const out = {}; for (const [p, b] of t.uni.readTreeFlat(t.uni.commit(h).tree)) out['/' + p] = t.uni.objects.get(b).content; return out; };
+const overlay = (t, env) => { const r = kustomizeBuild(mapFiles(gitTree(t, 'lumen/gitops')), `/apps/tickets/overlays/${env}`); return r.error ? null : r.docs; };
+const tDep = (t, ns) => t.cluster('lumen')?.get('Deployment', ns, 'tickets') || null;
+const tReady = (t, ns, n) => { const d = tDep(t, ns); return !!d && d.spec.replicas === n && (d.status.readyReplicas || 0) === n && (d.status.updatedReplicas || 0) === n; };
+const tApp = (t, name) => { const a = t.kapp('lumen', name); return a && a.status?.sync?.status === 'Synced' && a.status?.health?.status === 'Healthy' && a.spec.syncPolicy?.automated?.selfHeal && a.spec.syncPolicy.automated.prune ? a : null; };
+
+// ---------- trial: the cost and access audit ----------
+const AUDIT_POL = 'apiVersion: kyverno.io/v1\nkind: ClusterPolicy\nmetadata:\n  name: require-limits\nspec:\n  validationFailureAction: Audit\n  background: true\n  rules:\n    - name: check-limits\n      match:\n        any:\n          - resources:\n              kinds:\n                - Pod\n      validate:\n        message: "CPU and memory limits are required."\n        pattern:\n          spec:\n            containers:\n              - resources:\n                  limits:\n                    cpu: "?*"\n                    memory: "?*"\n';
+const AUDIT_PW = ['Sh0p', 'Db', 'Pr0d', '2025'].join('-');
+const auditFails = t => { const c = t.cluster('lumen'); if (!c?.kyverno) return -1; return c.list('Deployment', 'shop').flatMap(o => policiesFor(c, 'shop').flatMap(p => evaluate(p, o))).filter(r => r.result === 'fail').length; };
 
 export default {
   id: 'hero',
@@ -346,6 +370,99 @@ export default {
         { type: 'multi', q: 'Good outcomes from an on-call week:', choices: ['Every alert resolved', 'Guard rails so each issue cannot recur the same way', 'Owned, dated action items', 'A list of who caused what'], answer: [0, 1, 2], explain: 'Blameless: systems, not scapegoats.' },
         { type: 'tf', q: 'Renewing the certificate by hand completes the Wednesday task.', answer: false, explain: 'Automate renewal (and alert on expiry) or it will happen again in 90 days.' },
         { type: 'order', q: 'Order your response to a page.', items: ['Acknowledge and look at the alert', 'Find the affected machine and the cause', 'Mitigate', 'Check the alert resolves', 'Add a guard rail and record it'], explain: 'Then write it down for the report.' },
+      ],
+    },
+    {
+      id: 'hero-gitops',
+      title: 'Trial: The GitOps migration',
+      summary: 'Move a service from a CI pipeline with cluster-admin credentials to GitOps: Kustomize overlays, Argo CD applications for staging and prod, promotion by pull request, credentials removed, drift reverted.',
+      minutes: 60,
+      boss: true,
+      lab: {
+        cwd: '~',
+        panels: ['cluster', 'github'],
+        setup(H) {
+          const c = H.cluster('lumen', { ingress: true });
+          H.argocd('lumen', { webhook: true });
+          H.install('laptop', 'kustomize');
+          for (const v of ['1.0.0', '1.1.0']) H.publishImage(`ghcr.io/lumen/tickets:${v}`, TICKETS_FILES(v));
+          H.k8s('lumen', [
+            { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'ci' } },
+            { apiVersion: 'v1', kind: 'ServiceAccount', metadata: { name: 'deployer', namespace: 'ci' } },
+            { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRoleBinding', metadata: { name: 'ci-admin' }, roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'cluster-admin' }, subjects: [{ kind: 'ServiceAccount', name: 'deployer', namespace: 'ci' }] },
+            { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'tickets' } },
+          ], { settle: 2 });
+          H.k8s('lumen', T_DEP + '---\n' + T_SVC, { ns: 'tickets', settle: 20 });
+          H.remote('lumen', 'tickets', [{ message: 'tickets service with CI deploy', files: { ...TICKETS_FILES('1.0.0'), 'k8s/deployment.yaml': T_DEP, 'k8s/service.yaml': T_SVC, '.github/workflows/deploy.yml': T_DEPLOY_WF, '.github/workflows/build.yml': T_BUILD_WF, 'README.md': '# tickets\n\nCI deploys every push to main with kubectl (see .github/workflows/deploy.yml).\n' } }], { collaborators: ['you'] });
+          H.secret('lumen/tickets', 'KUBECONFIG_DATA', kubeconfigText(c));
+          H.remote('lumen', 'gitops', [{ message: 'Empty GitOps repository', files: { 'README.md': '# lumen/gitops\n\nDesired state for Lumen\'s clusters. One folder per service under apps/.\n' } }], { collaborators: ['you'] });
+          H.run('git clone -q https://github.com/lumen/tickets.git && git clone -q https://github.com/lumen/gitops.git', { on: 'laptop' });
+        },
+        suggestions: ['cat ~/tickets/.github/workflows/deploy.yml', 'kubectl get clusterrolebindings -o wide | grep cluster-admin'],
+        tasks: [
+          { title: '`lumen/gitops` holds tickets as a Kustomize base (`apps/tickets/base`) with `apps/tickets/overlays/staging` (namespace `tickets-staging`) and `apps/tickets/overlays/prod` (namespace `tickets-prod`, 3 replicas), pushed to main', solution: 'cd ~/gitops && mkdir -p apps/tickets/base apps/tickets/overlays/staging apps/tickets/overlays/prod && …', test: ['cd ~/gitops && mkdir -p apps/tickets/base apps/tickets/overlays/staging apps/tickets/overlays/prod', 'cp ~/tickets/k8s/*.yaml apps/tickets/base/', "printf 'resources:\\n  - deployment.yaml\\n  - service.yaml\\n' > apps/tickets/base/kustomization.yaml", "printf 'namespace: tickets-staging\\nresources:\\n  - ../../base\\n' > apps/tickets/overlays/staging/kustomization.yaml", "printf 'namespace: tickets-prod\\nresources:\\n  - ../../base\\nreplicas:\\n  - name: tickets\\n    count: 3\\n' > apps/tickets/overlays/prod/kustomization.yaml", 'git add -A && git commit -qm "tickets: base and overlays" && git push -q'], check: t => { const st = overlay(t, 'staging'), pr = overlay(t, 'prod'); const ds = st?.find(d => d.kind === 'Deployment'), dp = pr?.find(d => d.kind === 'Deployment'); return !!ds && ds.metadata.namespace === 'tickets-staging' && !!dp && dp.metadata.namespace === 'tickets-prod' && dp.spec.replicas === 3; } },
+          { title: 'Argo CD deploys both overlays: applications `tickets-staging` and `tickets-prod`, automated with self-heal and prune (creating their namespaces), Synced and Healthy', solution: 'argocd login --core && argocd app create tickets-staging … && argocd app create tickets-prod …', test: ['argocd login --core', 'argocd app create tickets-staging --repo https://github.com/lumen/gitops.git --path apps/tickets/overlays/staging --dest-server https://kubernetes.default.svc --dest-namespace tickets-staging --sync-policy automated --self-heal --auto-prune --sync-option CreateNamespace=true', 'argocd app create tickets-prod --repo https://github.com/lumen/gitops.git --path apps/tickets/overlays/prod --dest-server https://kubernetes.default.svc --dest-namespace tickets-prod --sync-policy automated --self-heal --auto-prune --sync-option CreateNamespace=true', 'sleep 40; argocd app list'], check: t => !!tApp(t, 'tickets-staging') && !!tApp(t, 'tickets-prod') && tReady(t, 'tickets-staging', 1) && tReady(t, 'tickets-prod', 3) },
+          { title: 'Release 1.1.0 to staging only (in git). Once it runs, promote it to prod through a pull request in `lumen/gitops`, and merge it', solution: 'cd ~/gitops/apps/tickets/overlays/staging && kustomize edit set image ghcr.io/lumen/tickets:1.1.0 && git commit -am … && git push; then a branch for prod, gh pr create, gh pr merge', test: ['cd ~/gitops/apps/tickets/overlays/staging && kustomize edit set image ghcr.io/lumen/tickets:1.1.0 && cd ~/gitops && git commit -qam "tickets: 1.1.0 to staging" && git push -q', 'sleep 5; kubectl rollout status deploy/tickets -n tickets-staging', 'git switch -c promote-1.1.0 && cd apps/tickets/overlays/prod && kustomize edit set image ghcr.io/lumen/tickets:1.1.0 && cd ~/gitops && git commit -qam "tickets: promote 1.1.0 to prod" && git push -q -u origin promote-1.1.0 && gh pr create --fill && gh pr merge --squash', 'git switch main && git pull -q', 'sleep 5; kubectl rollout status deploy/tickets -n tickets-prod', 'kubectl get deploy -n tickets-prod -o wide'], check: t => { const ok = ns => tDep(t, ns)?.spec.template.spec.containers[0].image === 'ghcr.io/lumen/tickets:1.1.0'; const prs = t.remote('lumen/gitops')?.meta.prs || []; return ok('tickets-staging') && ok('tickets-prod') && tReady(t, 'tickets-prod', 3) && prs.some(p => p.state === 'merged'); } },
+          { title: 'CI loses its cluster access: the `KUBECONFIG_DATA` secret is deleted, no workflow in `lumen/tickets` runs kubectl, the `ci-admin` binding is gone, and the old copy in namespace `tickets` is removed', solution: 'cd ~/tickets && gh secret delete KUBECONFIG_DATA && git rm .github/workflows/deploy.yml && git commit -m … && git push && kubectl delete clusterrolebinding ci-admin && kubectl delete namespace tickets', test: ['cd ~/tickets && gh secret delete KUBECONFIG_DATA && git rm -q .github/workflows/deploy.yml && git commit -qm "Deploys move to GitOps (lumen/gitops)" && git push -q', 'kubectl delete clusterrolebinding ci-admin && kubectl delete namespace tickets'], check: t => { const b = t.remote('lumen/tickets'); const h = b?.refs['refs/heads/main']; const wf = h ? [...t.uni.readTreeFlat(t.uni.commit(h).tree)].filter(([p]) => p.startsWith('.github/workflows/')).map(([, x]) => t.uni.objects.get(x).content).join('\n') : ''; const c = t.cluster('lumen'); return !b?.meta.secrets?.KUBECONFIG_DATA && !/kubectl/.test(wf) && !c.get('ClusterRoleBinding', null, 'ci-admin') && !c.get('Namespace', null, 'tickets') && !authorize(c, saIdentity('ci', 'deployer'), { verb: 'patch', resource: 'deployments', group: 'apps', ns: 'tickets-prod' }); } },
+          { title: 'Prove it: scale prod by hand and watch Argo CD put it back to 3', solution: 'kubectl scale deploy tickets -n tickets-prod --replicas=1 && sleep 10 && kubectl get deploy -n tickets-prod', check: t => t.after(e => e.type === 'kubectl' && (e.verb === 'scale' || e.verb === 'edit' || e.verb === 'patch') && e.ns === 'tickets-prod', e => e.type === 'argocd-sync' && e.app === 'tickets-prod' && e.auto && e.ok) && tReady(t, 'tickets-prod', 3) },
+        ],
+      },
+      quiz: [
+        { type: 'mc', q: 'After the migration, what does the tickets CI pipeline need to deploy to production?', choices: ['A cluster-admin kubeconfig', 'Nothing in the cluster: it builds the image and (via a PR or commit) changes the tag in the GitOps repo', 'SSH access to the nodes', 'Argo CD\'s admin password'], answer: 1, explain: 'Argo CD pulls from git.' },
+        { type: 'mc', q: 'How is a release promoted from staging to prod in this setup?', choices: ['Rebuild the image for prod', 'A pull request that changes the image tag in the prod overlay', 'kubectl apply in prod', 'Copy the staging namespace'], answer: 1, explain: 'Same image, reviewed promotion.' },
+        { type: 'tf', q: 'Deleting the CI workflow is enough; the kubeconfig secret and the cluster-admin binding can stay.', answer: false, explain: 'Remove credentials and bindings that are no longer needed: they are still keys to production.' },
+        { type: 'mc', q: 'Someone scales prod by hand during an incident. With self-heal on, what should they do to keep the change?', choices: ['Scale again', 'Commit the change to the prod overlay in git', 'Disable Argo CD', 'Edit the ReplicaSet'], answer: 1, explain: 'Git is the source of truth.' },
+        { type: 'order', q: 'Order the migration so production never runs without a deployer.', items: ['Write the base and overlays in the GitOps repo', 'Let Argo CD deploy staging and prod', 'Verify both are Synced and Healthy', 'Remove CI\'s credentials, deploy step and admin binding', 'Delete the old CI-managed copy'], explain: 'Add the new path before removing the old one.' },
+      ],
+    },
+    {
+      id: 'hero-audit',
+      title: 'Trial: The cost and access audit',
+      summary: 'A one-day audit with fixes: cut the cloud run rate without touching what is in use, tag every instance, remove cluster-admin from service accounts, take a password out of a manifest, and enforce resource limits.',
+      minutes: 50,
+      boss: true,
+      lab: {
+        cwd: '~',
+        panels: ['cloud', 'cluster'],
+        setup(H) {
+          H.cloud({ tools: ['awscli', 'jq'] });
+          const now = H.uni.time, D = 86400;
+          H.clickops(c => {
+            for (const k of [0, 1]) { const i = c.launch({ ami: UBUNTU_AMI, instance_type: 't3.large', tags: { Name: `web-${k}`, team: 'shop', env: 'prod' } }); i.metrics = { cpuAvg: 34, cpuMax: 71 }; }
+            const web0 = c.all('aws_instance').find(i => i.tags.Name === 'web-0');
+            const old = c.launch({ ami: UBUNTU_AMI, instance_type: 'm5.xlarge', tags: { Name: 'analytics-2023' } }); old.metrics = { cpuAvg: 0.6, cpuMax: 1.4 };
+            const batch = c.launch({ ami: UBUNTU_AMI, instance_type: 't3.medium', tags: { Name: 'nightly-batch', team: 'data' } }); batch.metrics = { cpuAvg: 22, cpuMax: 90 };
+            c.put('aws_ebs_volume', { id: c.newId('vol'), size: 200, type: 'gp3', state: 'in-use', attached: web0.id, created: now - 200 * D, tags: { Name: 'web-0-uploads', team: 'shop', env: 'prod' } });
+            for (const k of [1, 2, 3]) c.put('aws_ebs_volume', { id: c.newId('vol'), size: 400, type: 'gp2', state: 'available', created: now - (250 + k * 30) * D, tags: { Name: `old-analytics-${k}` } });
+            for (const k of [0, 1]) c.put('aws_eip', { public_ip: `34.251.4.${30 + k}`, association: null, created: now - 300 * D, tags: {} });
+            for (let k = 0; k < 20; k++) c.put('aws_ebs_snapshot', { id: c.newId('snap'), volume_id: 'vol-analytics', volume_size: 400, created: now - (400 + k * 20) * D, description: `analytics nightly ${k}`, tags: {} });
+          });
+          H.cluster('lumen');
+          H.kyverno('lumen');
+          H.k8s('lumen', [
+            parseYaml(AUDIT_POL),
+            { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'shop' } },
+            { apiVersion: 'v1', kind: 'ServiceAccount', metadata: { name: 'reports', namespace: 'shop' } },
+            { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRoleBinding', metadata: { name: 'reports-admin' }, roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'cluster-admin' }, subjects: [{ kind: 'ServiceAccount', name: 'reports', namespace: 'shop' }] },
+            { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'shop', namespace: 'shop' }, spec: { replicas: 2, selector: { matchLabels: { app: 'shop' } }, template: { metadata: { labels: { app: 'shop' } }, spec: { containers: [{ name: 'shop', image: 'nginx:1.27', ports: [{ containerPort: 80 }], env: [{ name: 'DB_HOST', value: 'db.shop.svc' }, { name: 'DB_PASSWORD', value: AUDIT_PW }] }] } } } },
+            { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'reports', namespace: 'shop' }, spec: { replicas: 1, selector: { matchLabels: { app: 'reports' } }, template: { metadata: { labels: { app: 'reports' } }, spec: { serviceAccountName: 'reports', containers: [{ name: 'reports', image: 'nginx:1.27-alpine', resources: { requests: { cpu: '20m', memory: '32Mi' }, limits: { cpu: '100m', memory: '64Mi' } } }] } } } },
+          ], { settle: 40 });
+        },
+        suggestions: ['aws ce get-cost-and-usage --time-period Start=2025-12-01,End=2026-01-01 --granularity MONTHLY --metrics UnblendedCost --group-by Type=TAG,Key=team', 'kubectl get clusterrolebindings -o wide'],
+        tasks: [
+          { title: 'Cost: bring the monthly run rate below $300 without touching anything in use (web-0 and web-1 keep running; the volume attached to web-0 stays)', solution: 'delete unattached volumes and old snapshots, release idle IPs, stop analytics-2023 …', test: ["for v in $(aws ec2 describe-volumes --filters Name=status,Values=available --query 'Volumes[].VolumeId' --output text); do aws ec2 delete-volume --volume-id $v; done", "for a in $(aws ec2 describe-addresses | jq -r '.Addresses[] | select(.InstanceId == null) | .AllocationId'); do aws ec2 release-address --allocation-id $a; done", "for s in $(aws ec2 describe-snapshots --owner-ids self | jq -r '.Snapshots[] | select(.StartTime < \"2025-06-01\") | .SnapshotId'); do aws ec2 delete-snapshot --snapshot-id $s; done", "aws ec2 stop-instances --instance-ids $(aws ec2 describe-instances --filters Name=tag:Name,Values=analytics-2023 --query 'Reservations[].Instances[].InstanceId' --output text)"], check: t => { const cloud = t.cloud(); const web = t.cres('aws_instance', i => /^web-/.test(i.tags?.Name || '')); return monthlyRunRate(cloud) < 300 && web.length === 2 && web.every(i => i.instance_state === 'running') && t.cres('aws_ebs_volume', v => v.state === 'in-use').length === 1; } },
+          { title: 'Ownership: every instance, running or stopped, has `team` and `env` tags', solution: "aws ec2 create-tags --resources <id> --tags Key=team,Value=… Key=env,Value=…", test: [t => `aws ec2 create-tags --resources ${t.cres('aws_instance', i => i.tags?.Name === 'analytics-2023')[0].id} --tags Key=team,Value=data Key=env,Value=dev Key=owner,Value=unknown Key=delete-after,Value=2026-02-01`, t => `aws ec2 create-tags --resources ${t.cres('aws_instance', i => i.tags?.Name === 'nightly-batch')[0].id} --tags Key=env,Value=prod`], check: t => t.cres('aws_instance').length === 4 && t.cres('aws_instance').every(i => i.tags?.team && i.tags?.env) },
+          { title: 'Cluster access: nothing except `system:masters` is bound to `cluster-admin`, and the `reports` service account in `shop` can only read ConfigMaps in `shop`', solution: 'kubectl delete clusterrolebinding reports-admin && kubectl create role configmap-reader -n shop --verb=get,list,watch --resource=configmaps && kubectl create rolebinding reports-configmaps -n shop --role=configmap-reader --serviceaccount=shop:reports', check: t => { const c = t.cluster('lumen'); const r = saIdentity('shop', 'reports'); const admins = c.list('ClusterRoleBinding').filter(b => b.roleRef?.name === 'cluster-admin').flatMap(b => b.subjects || []); return admins.every(x => x.kind === 'Group' && x.name === 'system:masters') && authorize(c, r, { verb: 'list', resource: 'configmaps', group: '', ns: 'shop' }) && !authorize(c, r, { verb: 'list', resource: 'secrets', group: '', ns: 'shop' }) && !authorize(c, r, { verb: 'list', resource: 'configmaps', group: '', ns: 'kube-system' }) && !authorize(c, r, { verb: 'patch', resource: 'deployments', group: 'apps', ns: 'shop' }); } },
+          { title: 'Secrets: the shop Deployment takes `DB_PASSWORD` from a Secret instead of a plain value, and its pods are healthy', solution: 'kubectl create secret generic shop-db -n shop --from-literal=password=… && kubectl set env … or edit the Deployment to use secretKeyRef', test: [t => `kubectl create secret generic shop-db -n shop --from-literal=password=${AUDIT_PW}`, { cmd: 'kubectl edit deploy shop -n shop', edit: text => text.replace(/- name: DB_PASSWORD\n(\s+)value: \S+/, (m, sp) => `- name: DB_PASSWORD\n${sp}valueFrom:\n${sp}  secretKeyRef:\n${sp}    key: password\n${sp}    name: shop-db`) }, 'kubectl rollout status deploy/shop -n shop'], check: t => { const d = t.cluster('lumen').get('Deployment', 'shop', 'shop'); const env = d?.spec.template.spec.containers[0].env || []; const pw = env.find(e => e.name === 'DB_PASSWORD'); return !!pw && !('value' in pw) && !!pw.valueFrom?.secretKeyRef && !!t.cluster('lumen').get('Secret', 'shop', pw.valueFrom.secretKeyRef.name) && (d.status.readyReplicas || 0) === 2 && (d.status.updatedReplicas || 0) === 2 && !JSON.stringify(d.spec).includes(AUDIT_PW); } },
+          { title: 'Policy: `require-limits` is enforced, and every workload in `shop` passes it', solution: 'kubectl set resources deploy shop -n shop --requests=cpu=50m,memory=64Mi --limits=cpu=200m,memory=128Mi && kubectl patch clusterpolicy require-limits --type merge -p \'{"spec":{"validationFailureAction":"Enforce"}}\'', test: ['kubectl set resources deploy shop -n shop --requests=cpu=50m,memory=64Mi --limits=cpu=200m,memory=128Mi', 'kubectl rollout status deploy/shop -n shop', 'kubectl patch clusterpolicy require-limits --type merge -p \'{"spec":{"validationFailureAction":"Enforce"}}\''], check: t => String(t.cluster('lumen').get('ClusterPolicy', null, 'require-limits')?.spec?.validationFailureAction).toLowerCase() === 'enforce' && auditFails(t) === 0 && (t.cluster('lumen').get('Deployment', 'shop', 'shop')?.status.readyReplicas || 0) === 2 },
+        ],
+      },
+      quiz: [
+        { type: 'mc', q: 'An idle, untagged instance nobody claims. What does a careful audit do?', choices: ['Terminate it now', 'Stop it, tag it with an owner question and a delete-after date', 'Leave it running', 'Make it bigger'], answer: 1, explain: 'Reversible first: a scream test.' },
+        { type: 'mc', q: 'The `reports` service account is bound to cluster-admin through a ClusterRoleBinding. The right fix?', choices: ['Delete the service account', 'Delete the binding and grant a namespaced Role with only the verbs it needs', 'Rename the binding', 'Give it view everywhere'], answer: 1, explain: 'Least privilege, scoped to its namespace.' },
+        { type: 'tf', q: 'Moving a password from `env.value` to a Secret referenced with `secretKeyRef` removes it from the Deployment manifest.', answer: true, explain: 'It still sits in the Secret; a secrets manager is the next step.' },
+        { type: 'mc', q: 'Why switch a policy to Enforce only after the workloads comply?', choices: ['Enforce is slower', 'Otherwise it blocks updates and rollbacks of the non-compliant workloads', 'Audit is deprecated', 'It is required by Kyverno'], answer: 1, explain: 'Audit, fix, enforce.' },
+        { type: 'multi', q: 'Which findings cost money every hour even though nothing uses them?', choices: ['Unattached EBS volumes', 'Unassociated Elastic IPs', 'Years of old snapshots', 'A RoleBinding'], answer: [0, 1, 2], explain: 'RBAC objects are free; their risk is not.' },
       ],
     },
   ],

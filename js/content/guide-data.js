@@ -215,6 +215,22 @@ export const SHEET = [
     ['kubectl -n NS get events --field-selector reason=FailedCreate', 'Why a ReplicaSet cannot create pods.'],
     ['aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=AKIA…', 'Everything one access key did.'],
   ]],
+  ['Platform & GitOps', [
+    ['helm install NAME CHART -n NS -f values.yaml --atomic', 'Install a chart; --atomic rolls back if it never becomes ready.'],
+    ['helm history NAME · helm rollback NAME REV', 'Release revisions · go back to one.'],
+    ['kubectl kustomize DIR · kubectl diff -k DIR · kubectl apply -k DIR', 'Render an overlay · compare with the cluster · apply it.'],
+    ['argocd app get APP --refresh · argocd app diff APP', 'Sync and health now · what differs between git and the cluster.'],
+    ['kubectl auth can-i VERB RES -n NS --as USER', 'Ask RBAC instead of guessing; --list shows everything.'],
+    ['kyverno apply policies/ --resource k8s/', 'Check manifests against policies before they reach the cluster.'],
+    ['vault kv get -field=password secret/app/db', 'Read one field of a Vault secret.'],
+    ['sops -d file.enc.yaml · sops file.enc.yaml', 'Decrypt · edit encrypted values safely.'],
+  ]],
+  ['Disks and performance', [
+    ['df -i · lsblk -f · blkid', 'Inodes per filesystem · disks, filesystems, UUIDs.'],
+    ['sudo mount -a · findmnt /data', 'Test /etc/fstab without rebooting · show a mount.'],
+    ['vmstat 1 5 · iostat -x · pidstat -d', 'CPU queue and I/O wait · disk %util · I/O per process.'],
+    ['sudo strace -p PID · sudo tcpdump -n port 5432', 'What a process is doing · what is on the wire.'],
+  ]],
   ['AI-assisted DevOps', [
     ['journalctl -u svc -n 50 | ai "why does svc fail to start?"', 'Ask with evidence, not a vague question.'],
     ["… | sed -E 's/(PASSWORD|SECRET|TOKEN)=[^ ]*/\\1=[REDACTED]/g' | ai \"…\"", 'Redact secrets before they leave your machine.'],
@@ -233,6 +249,11 @@ export const SHEET = [
 ];
 
 export const DEBUG = [
+  ['No space left on device, but df -h shows space', 'Out of inodes: millions of small files', '`df -i` · `find DIR -xdev -type f | wc -l` · delete old files with `find … -mtime +N -delete`'],
+  ['Server stuck in emergency mode after reboot', 'Broken /etc/fstab entry without nofail', 'Cloud console · fix fstab · always test with `mount -a`'],
+  ['Argo CD app OutOfSync', 'New commit not synced · manual drift · objects that need pruning', '`argocd app diff APP` · `argocd app get APP --refresh`'],
+  ['admission webhook … denied the request', 'A Kyverno (or Gatekeeper) policy blocks the object', 'Read the policy message · `kyverno apply` locally · fix the manifest'],
+  ['… is forbidden: User … cannot …', 'RBAC: no role grants that verb on that resource', '`kubectl auth can-i … --as …` · grant exactly what the error names'],
   ['command not found', 'Not installed · not on PATH · typo · script not executable', '`which cmd` · `echo $PATH` · `apt install …` · `ls -l script.sh` (needs x)'],
   ['Permission denied', 'Wrong owner or mode · needs root · a parent directory lacks x', '`ls -l file` · `namei -l path` · `id` · use `sudo` only when it is a system file'],
   ['No space left on device', 'Logs or old releases filled the disk · deleted file still held open', '`df -h` · `du -sh /var/log/* | sort -h` · `journalctl --vacuum-size=200M`'],
@@ -276,6 +297,20 @@ export const DEBUG = [
 ];
 
 export const GLOSSARY = [
+  ['Helm chart / release', 'A packaged, parameterised set of manifests / one named installation of it, with numbered revisions.'],
+  ['Kustomize overlay', 'Per-environment patches on top of a shared base of plain manifests.'],
+  ['GitOps', 'Deploying by changing git: an agent in the cluster pulls the desired state and keeps the cluster matching it.'],
+  ['Self-heal / prune', 'Argo CD reverting manual drift / deleting objects that were removed from git.'],
+  ['ApplicationSet', 'An Argo CD generator that creates one Application per list item or repository folder.'],
+  ['RBAC', 'Role-based access control: Roles list verbs on resources, bindings grant them to users, groups or service accounts.'],
+  ['NetworkPolicy', 'Firewall rules for pods: once a pod is selected, only allowed traffic gets through.'],
+  ['Admission controller', 'A check the API server runs before storing an object; Kyverno and Gatekeeper enforce policies this way.'],
+  ['External Secrets', 'An operator that copies secrets from a manager like Vault into Kubernetes Secrets and keeps them fresh.'],
+  ['SOPS', 'A tool that encrypts the values of YAML/JSON files (with age or KMS keys) so they can live in git.'],
+  ['Golden path', 'A supported, self-service way to do a common task that is secure and observable by default.'],
+  ['FinOps', 'Making cloud cost a shared engineering responsibility: see it, own it, optimise it.'],
+  ['Inode', 'A filesystem\'s record for one file or directory; a filesystem can run out of them before it runs out of bytes.'],
+  ['I/O wait', 'CPU time spent waiting for disk (or network storage); high wa with blocked tasks points at a saturated disk.'],
   ['DevOps', 'A culture and set of practices where the people who build software also own how it is delivered and run, with automation and fast feedback at every step.'],
   ['CALMS', 'Culture, Automation, Lean, Measurement, Sharing: five pillars for judging a DevOps practice.'],
   ['DORA metrics', 'Deployment frequency, lead time for changes, change failure rate and time to restore service.'],

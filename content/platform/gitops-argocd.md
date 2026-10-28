@@ -55,6 +55,16 @@ spec:
     syncOptions: [CreateNamespace=true]
 ```
 
+```replay
+title: Drift meets self-heal
+scenario: platform
+show: cluster
+step: kubectl get applications -n argocd | Argo CD already deploys billing from lumen/gitops, with automated sync and self-heal.
+step: kubectl scale deploy billing -n billing --replicas=3 | Someone "fixes" production by hand: three replicas instead of the one in git…
+step: sleep 6; kubectl get deploy billing -n billing | …Argo CD saw the drift and synced git's version back.
+step: argocd app history billing --core 2>/dev/null; kubectl get application billing -n argocd -o jsonpath='{.status.sync.status} {.status.health.status}' | Still Synced and Healthy: the only lasting way to change it is a commit.
+```
+
 ## analogy | A thermostat that reads the plan
 
 Kubernetes already keeps pods matching a Deployment. Argo CD does the same one level up: the plan is the git repository. Turn the heating up by hand and the thermostat turns it back down; to change the temperature for good, you change the plan.

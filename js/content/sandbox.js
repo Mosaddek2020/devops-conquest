@@ -2,6 +2,7 @@ import { relWorld } from './r10-reliability.js';
 import devsecops from './r11-devsecops.js';
 import aiops from './r12-aiops.js';
 import hero from './r14-hero.js';
+import { platformWorld } from './r13-platform.js';
 
 // Sandbox starting points. Later simulators add more (containers, clusters, cloud).
 
@@ -131,6 +132,39 @@ export const SCENARIOS = {
       H.install('laptop', 'shellcheck');
     },
     panels: ['observe', 'system'],
+  },
+  platform: {
+    title: 'Platform cluster',
+    note: 'A cluster run the platform way: Argo CD deploys every folder of lumen/gitops (billing is there already), Kyverno is installed (no policies yet: write some), External Secrets and a Vault server (admin token in ~/vault-admin-token) are ready, and helm and the lumen CLI are installed. Try: kubectl get applications -n argocd, lumen templates, lumen create receipts --template node-api --owner team-payments, helm repo add bitnami https://charts.bitnami.com/bitnami',
+    setup(H) {
+      platformWorld(H);
+      H.kyverno('lumen');
+      H.install('laptop', 'helm', 'kustomize', 'sops', 'age');
+      H.eso('lumen');
+      H.vault({ rootToken: ['hvs', 'SandboxRoot'].join('.') });
+      H.write('laptop', '~/vault-admin-token', ['hvs', 'SandboxRoot'].join('.') + '\n', { owner: 'dev', mode: 0o600 });
+    },
+    panels: ['cluster', 'github'],
+  },
+  diskperf: {
+    title: 'Disks and performance',
+    note: 'app1 has a spare 20 GB volume (/dev/xvdf) and a busy afternoon: a backup hammers the disk and a worker cannot reach db1. Try: ssh ubuntu@app1, then lsblk, df -i, vmstat 1 5, iostat -x, pidstat -d, sudo strace -p $(pgrep -f worker.js), sudo tcpdump -n port 5432 -c 4',
+    setup(H) {
+      H.server('app1', { cpus: 4 });
+      H.server('db1', { packages: ['postgresql'] });
+      H.authorize('laptop', 'dev', 'app1', 'ubuntu');
+      H.authorize('laptop', 'dev', 'db1', 'ubuntu');
+      H.install('app1', 'sysstat', 'strace', 'tcpdump');
+      H.disk('app1', { name: 'xvdf', sizeGB: 20 });
+      H.write('db1', '/etc/postgresql/16/main/postgresql.conf', "listen_addresses = '*'\nport = 5432\n");
+      H.run('sudo systemctl restart postgresql && sudo ufw allow OpenSSH && sudo ufw enable', { on: 'db1' });
+      const tar = H.proc('app1', { cmd: 'tar czf /backup/uploads.tgz /var/www/uploads', user: 'root', cpu: 35, mem: 40, state: 'D' });
+      tar.io = { r: 128000, w: 41000 };
+      const w = H.proc('app1', { cmd: '/usr/bin/node /opt/worker/worker.js', user: 'ubuntu', cpu: 0.1, mem: 95 });
+      w.connectsTo = { host: 'db1', port: 5432, label: 'jobs db connect' };
+      H.perf('app1', { load: [8.4, 6.9, 3.7] });
+    },
+    panels: ['system', 'network'],
   },
   pipeline: {
     title: 'Pipeline to cluster',

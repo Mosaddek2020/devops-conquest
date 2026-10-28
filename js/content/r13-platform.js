@@ -123,7 +123,7 @@ const APPSET = 'apiVersion: argoproj.io/v1alpha1\nkind: ApplicationSet\nmetadata
 const BILLING_DEP = (probes = false) => `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: billing\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: billing\n  template:\n    metadata:\n      labels:\n        app: billing\n    spec:\n      containers:\n        - name: billing\n          image: nginx:1.27\n          ports:\n            - name: http\n              containerPort: 80\n${probes ? '          readinessProbe:\n            httpGet:\n              path: /\n              port: http\n          livenessProbe:\n            httpGet:\n              path: /\n              port: http\n          resources:\n            requests:\n              cpu: 50m\n              memory: 64Mi\n            limits:\n              cpu: 200m\n              memory: 128Mi\n' : ''}`;
 const BILLING_NP = 'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: billing\nspec:\n  podSelector:\n    matchLabels:\n      app: billing\n  ingress:\n    - from:\n        - podSelector: {}\n      ports:\n        - port: http\n';
 const BILLING_CAT = 'apiVersion: backstage.io/v1alpha1\nkind: Component\nmetadata:\n  name: billing\n  description: Invoices and payment runs\nspec:\n  type: service\n  lifecycle: production\n';
-function platformWorld(H, { kyverno = false, boss = false } = {}) {
+export function platformWorld(H, { kyverno = false, boss = false } = {}) {
   const c = H.cluster('lumen', { ingress: true });
   H.argocd('lumen', { webhook: true });
   const D = 86400, now = H.uni.time;
