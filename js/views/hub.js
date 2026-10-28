@@ -375,6 +375,16 @@ class World3D {
       l.el.style.opacity = String(Math.max(0.35, Math.min(1, 1.6 - dist / 60)));
       l.el.style.zIndex = String(Math.round(1000 - dist * 10));
     }
+    // a realm label under the "YOU" marker moves just below it, so both stay readable
+    const cur = this.labels.find(l => l.el.classList.contains('is-current') && l.el.style.display !== 'none');
+    if (cur) {
+      const cx = parseFloat(cur.el.style.left), cy = parseFloat(cur.el.style.top);
+      for (const l of this.labels) {
+        if (l === cur || l.kind !== 'realm' || l.el.style.display === 'none') continue;
+        const y = parseFloat(l.el.style.top);
+        if (Math.abs(parseFloat(l.el.style.left) - cx) < 170 && Math.abs(y - cy) < 26) l.el.style.top = `${cy + 28}px`;
+      }
+    }
   }
 
   retheme() {

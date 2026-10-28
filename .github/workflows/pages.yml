@@ -31,6 +31,8 @@ jobs:
           node tests/ops.mjs
           node tests/ci.mjs
           node tests/docker.mjs
+          node tests/storage.mjs
+          node tests/platform.mjs
           node tests/quizzes.mjs
           node tests/labs.mjs
       - uses: actions/configure-pages@v6

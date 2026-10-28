@@ -16,19 +16,20 @@ tested, built and deployed by `.github/workflows/pages.yml`).
 | # | Realm | Lessons |
 |---|---|---|
 | 0 | Base Camp: what DevOps is, the delivery loop, working with AI | 4 |
-| 1 | Linux: shell, files, permissions, pipes, processes, packages | 7 |
+| 1 | Linux: shell, files, permissions, pipes, processes, packages, disks and mounts, performance troubleshooting | 9 |
 | 2 | Networking: IP/DNS, HTTP, SSH keys, firewalls, TLS | 6 |
-| 3 | Servers & Services: systemd, nginx, releases, logs and cron | 5 |
-| 4 | Scripting & Automation: robust bash, graded by running your scripts | 4 |
+| 3 | Servers & Services: systemd, nginx, releases, logs and cron, hardening and resource limits | 6 |
+| 4 | Scripting & Automation: robust bash, Makefiles, APIs with curl and jq, testing scripts with ShellCheck and bats | 7 |
 | 5 | CI/CD: GitHub Actions on simulated runners that build, deploy over SSH and smoke-test | 6 |
 | 6 | Containers: Docker images, Dockerfiles, small safe images, volumes, networks, Compose, registries | 8 |
 | 7 | Kubernetes: desired state, debugging pods, Services and Ingress, config and Secrets, probes and resources, rollouts, HPA and StatefulSets | 8 |
-| 8 | Infrastructure as Code: Terraform (plans, state, drift, modules, safe changes) and Ansible (playbooks, templates, handlers, vault) | 8 |
+| 8 | Infrastructure as Code: Terraform (plans, state, drift, modules, safe changes), Ansible (playbooks, templates, handlers, vault) and cloud costs (FinOps) | 9 |
 | 9 | Observability: golden signals, Prometheus, PromQL, dashboards, alerting, logs, traces, SLOs | 9 |
 | 10 | Reliability: redundancy and failover, incident response, runbook automation, blameless postmortems, backups and restores, game days | 7 |
 | 11 | DevSecOps: threat modelling and hardening, secrets and key rotation, SAST, DAST, SBOMs and image signing, IaC scanning, pod security, CI security gates | 9 |
 | 12 | AI-assisted DevOps: prompting with context (and without secrets), reviewing AI-written scripts and Terraform, prompt injection and bot permissions, agents under guardrail policies, operating LLM services | 7 |
-| 13 | Hero Trials: commit to cluster, trust but verify (SBOMs and signed digests), platform from code, the on-call week | 4 |
+| 13 | Platform & GitOps: Helm, Kustomize, Argo CD, RBAC, NetworkPolicies, Kyverno policy as code, Vault + External Secrets + SOPS, golden paths and DORA metrics | 9 |
+| 14 | Hero Trials: commit to cluster, trust but verify, platform from code, the on-call week, the GitOps migration, the cost and access audit | 6 |
 
 ## How it works
 
@@ -46,7 +47,9 @@ tested, built and deployed by `.github/workflows/pages.yml`).
   semgrep, trivy, syft, OWASP ZAP baseline/full scans, lynis, cosign, all of which inspect the
   simulated world so a finding only goes away when the problem is fixed), AI-ops tools
   (`aiops.js`: shellcheck, an ops `agent` with allow/ask/deny policies and an audit log, an AI
-  review-bot action, an LLM gateway with token and cost metrics) and a
+  review-bot action, an LLM gateway with token and cost metrics), platform tools (`helm.js` with `gotemplate.js`, `kustomize.js`, `argocd.js`, `rbac.js`, `netpol.js`,
+  `kyverno.js`, `vault.js` with External Secrets, `sops.js`, `platform.js`: the `lumen` developer-platform CLI),
+  disks and performance (`storage.js`, `perf.js`), cloud costs (`finops.js`), `make` and `bats`, and a
   simulated AI assistant (`ai`) whose scripted answers are sometimes wrong on purpose.
 - `js/content/rNN-*.js` defines each realm's labs (setup, tasks with checks and reference
   solutions) and quizzes; `content/<realm>/<lesson>.md` holds the lesson text.
@@ -62,4 +65,5 @@ node tests/labs.mjs            # every lab's reference solution passes, no prema
 node tests/quizzes.mjs         # quiz structure
 node tests/modules.mjs          # every module imports (catches what node --check misses)
 node tests/shell.mjs && node tests/ops.mjs && node tests/ci.mjs && node tests/docker.mjs
+node tests/storage.mjs && node tests/platform.mjs
 ```
