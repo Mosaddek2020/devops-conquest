@@ -48,6 +48,12 @@ export function renderPath() {
       h('ol', { class: 'lesson-list' }, r.lessons.map(l => h('li', {}, lessonRow(l))))));
   }
   page.append(grid);
+  // the companion course teaches the git this one assumes
+  page.append(h('aside', { class: 'course-link' },
+    h('p', { class: 'eyebrow' }, 'Companion course'),
+    h('h2', {}, 'Git Conquest'),
+    h('p', {}, 'Every realm here assumes you can commit, branch, open pull requests and untangle a messy history. New to git or GitHub? Git Conquest teaches exactly that, from zero, in the same hands-on style.'),
+    h('a', { class: 'btn btn-primary', href: 'https://mosaddek2020.github.io/git-conquest/', target: '_blank', rel: 'noopener' }, 'Open Git Conquest ↗')));
   return page;
 }
 

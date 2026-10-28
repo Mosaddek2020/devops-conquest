@@ -49,7 +49,7 @@ export function renderLesson(id, stage, lensIdx = 0) {
     const cur = currentLessonId();
     page.append(h('div', { class: 'locked-note' },
       h('strong', {}, 'This lesson is still locked.'),
-      h('span', {}, 'Git Conquest is mastery-based: each lesson opens once you have mastered the one before it. That way every new idea sits on solid ground.'),
+      h('span', {}, 'DevOps Conquest is mastery-based: each lesson opens once you have mastered the one before it. That way every new idea sits on solid ground.'),
       cur ? h('a', { class: 'btn btn-primary', href: `#/lesson/${cur}` }, `Go to your current lesson: ${curriculum.byId[cur].title}`) : null));
     return page;
   }
