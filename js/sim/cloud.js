@@ -273,6 +273,9 @@ def('aws', c => {
     c.uni.emit({ type: 'cloudtrail', filter: attr, count: ev.length });
     return show({ Events: ev.map(e => ({ EventId: e.id, EventName: e.name, ReadOnly: String(!!e.readOnly), AccessKeyId: e.key, EventTime: new Date(e.time * 1000).toISOString().replace('.000Z', '+00:00'), EventSource: e.source, Username: e.user, Resources: (e.resources || []).map(r => ({ ResourceType: /^i-/.test(r) ? 'AWS::EC2::Instance' : /^AKIA/.test(r) ? 'AWS::IAM::AccessKey' : 'AWS::Resource', ResourceName: r })), CloudTrailEvent: JSON.stringify({ eventVersion: '1.09', userIdentity: { type: 'IAMUser', userName: e.user, accessKeyId: e.key }, eventTime: new Date(e.time * 1000).toISOString(), eventSource: e.source, eventName: e.name, awsRegion: e.region, sourceIPAddress: e.ip, userAgent: e.agent || 'aws-cli/2.18.12' }) })) });
   }
+  // other modules add services and EC2 operations: AWS_EXT[svc](ctx) / AWS_EXT['ec2:op'](ctx)
+  const ext = AWS_EXT[`${svc}:${op}`] || (svc !== 'ec2' && svc !== 's3' && AWS_EXT[svc]);
+  if (ext) return ext({ c, cloud, op, rest, flags, show, region, inRegion, by, caller });
   if (svc === 'ec2') {
     const ids = [].concat(flags['instance-ids'] || []);
     switch (op) {
@@ -390,6 +393,8 @@ def('aws', c => {
   }
   return c.fail(`\naws: error: argument command: Invalid choice: '${svc} ${op || ''}'`, 252);
 }, { pkg: 'awscli' });
+
+export const AWS_EXT = {};
 
 export function installCloud(uni, opts) {
   uni.cloud = new Cloud(uni, opts);

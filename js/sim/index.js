@@ -20,6 +20,7 @@ import './platform.js';
 import './storage.js';
 import './perf.js';
 import './linux-lab.js';
+import './finops.js';
 import './k8s-lab.js';
 import './cloud.js';
 import './terraform.js';
