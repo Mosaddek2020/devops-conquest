@@ -122,12 +122,11 @@ export function kustomizeBuild(fs, dir, depth = 0) {
       for (const lit of g.literals || []) { const i = lit.indexOf('='); data[lit.slice(0, i)] = lit.slice(i + 1).replace(/^"(.*)"$/, '$1'); }
       for (const f of g.files || []) { const [key, path] = f.includes('=') ? f.split('=') : [f.split('/').pop(), f]; const t = fs.read(rel(path)); if (t === undefined) return { error: `Error: loading KV pairs: file sources: [${f}]: evalsymlink failure on '${rel(path)}' : lstat ${rel(path)}: no such file or directory` }; data[key] = t; }
       for (const f of g.envs || (g.env ? [g.env] : [])) { const t = fs.read(rel(f)); if (t === undefined) return { error: `Error: loading KV pairs: env source files: [${f}]: no such file or directory` }; for (const line of t.split('\n')) { const m = line.match(/^\s*([A-Za-z_][\w.-]*)=(.*)$/); if (m) data[m[1]] = m[2]; } }
-      const existing = docs.find(d => d.kind === kind && d.metadata?.name === g.name);
+      const existing = docs.find(d => d.kind === kind && (d.metadata?.__orig === g.name || d.metadata?.name === g.name));
       if ((g.behavior === 'merge' || g.behavior === 'replace') && existing) {
         const cur = kind === 'Secret' ? Object.fromEntries(Object.entries(existing.data || {}).map(([a, b]) => [a, atob(b)])) : (existing.data || {});
         const merged = g.behavior === 'merge' ? { ...cur, ...data } : data;
         if (kind === 'Secret') existing.data = Object.fromEntries(Object.entries(merged).map(([a, b]) => [a, btoa(b)])); else existing.data = merged;
-        existing.metadata.__base = existing.metadata.__base || existing.metadata.name.replace(/-[a-z0-9]{10}$/, '');
         continue;
       }
       const o = { apiVersion: 'v1', kind, metadata: { name: g.name, ...(g.namespace ? { namespace: g.namespace } : {}), ...(g.options?.labels ? { labels: g.options.labels } : {}) }, ...(kind === 'Secret' ? { type: g.type || 'Opaque', data: Object.fromEntries(Object.entries(data).map(([a, b]) => [a, btoa(b)])) } : { data }), __file: kpath };
@@ -186,10 +185,11 @@ export function kustomizeBuild(fs, dir, depth = 0) {
   for (const d of docs) {
     if (d.kind === 'Namespace' || d.kind === 'CustomResourceDefinition') continue;
     const old = d.metadata.name;
-    const base = d.metadata.__base || old;
-    let nm = (k.namePrefix || '') + base + (k.nameSuffix || '');
+    d.metadata.__orig = d.metadata.__orig || old;
+    let nm = (k.namePrefix || '') + (d.metadata.__nohash || old) + (k.nameSuffix || '');
+    d.metadata.__nohash = nm;
     if (d.metadata.__gen) { const content = JSON.stringify({ kind: d.kind, name: nm, data: d.data }); nm = `${nm}-${fnv(content)}`; }
-    if (nm !== old) { rename.set(`${d.kind}/${old}`, nm); rename.set(`${d.kind}/${base}`, nm); d.metadata.name = nm; }
+    if (nm !== old) { rename.set(`${d.kind}/${old}`, nm); rename.set(`${d.kind}/${d.metadata.__orig}`, nm); d.metadata.name = nm; }
   }
   const ref = (kind, name) => rename.get(`${kind}/${name}`) || name;
   for (const d of docs) {
@@ -207,7 +207,7 @@ export function kustomizeBuild(fs, dir, depth = 0) {
     if (['RoleBinding', 'ClusterRoleBinding'].includes(d.kind)) { if (d.roleRef) d.roleRef.name = ref(d.roleRef.kind, d.roleRef.name); for (const s of d.subjects || []) if (s.kind === 'ServiceAccount') s.name = ref('ServiceAccount', s.name); }
     if (d.kind === 'StatefulSet' && d.spec?.serviceName) d.spec.serviceName = ref('Service', d.spec.serviceName);
   }
-  for (const d of docs) { delete d.metadata.__gen; delete d.metadata.__base; }
+  if (depth === 0) for (const d of docs) { delete d.metadata.__gen; delete d.metadata.__orig; delete d.metadata.__nohash; }
   docs.sort((a, b) => rank(a.kind) - rank(b.kind));
   return { docs };
 }
@@ -225,3 +225,58 @@ export function docsToYaml(docs, toYaml) {
   return docs.map(d => { const { __file, ...rest } = d; return toYaml(orderTop(rest)); }).join('\n---\n') + '\n';
 }
 const orderTop = o => { const out = {}; for (const k of ['apiVersion', 'kind', 'metadata']) if (k in o) out[k] = o[k]; for (const [k, v] of Object.entries(o)) if (!(k in out)) out[k] = v; return out; };
+
+// the standalone kustomize CLI: build, and the `edit` commands CI uses to bump image tags
+import { def } from './registry.js';
+import { toYaml } from './kubectl.js';
+import { ACTIONS } from './runner.js';
+import { installPkg } from './packages.js';
+
+def('kustomize', c => {
+  const [cmd, sub, ...rest] = c.args;
+  if (!cmd || cmd === 'help' || cmd === '--help') { c.print('Manages declarative configuration of Kubernetes.', '', 'Usage:', '  kustomize [command]', '', 'Available Commands:', '  build       Build a kustomization target from a directory or URL', '  edit        Edits a kustomization file', '  version     Prints the kustomize version'); return 0; }
+  if (cmd === 'version') { c.print('v5.4.3'); return 0; }
+  if (cmd === 'build') {
+    const r = kustomizeBuild(hostFiles(c.host), c.resolve(sub || '.'));
+    if (r.error) return c.fail(r.error, 1);
+    c.print(...r.docs.map(d => { const { __file, ...x } = d; return toYaml(x); }).join('\n---\n').split('\n'));
+    c.uni.emit({ type: 'kustomize', host: c.host.name, cmd, dir: c.resolve(sub || '.') });
+    return 0;
+  }
+  if (cmd === 'edit') {
+    const kpath = findKustomization(hostFiles(c.host), c.cwd);
+    if (!kpath) return c.fail(`Error: Missing kustomization file 'kustomization.yaml'.`, 1);
+    let k;
+    try { k = parseYaml(c.host.files.get(kpath)) || {}; } catch (e) { return c.fail(`Error: ${e.message}`, 1); }
+    const [what, ...args] = rest;
+    if (sub === 'set' && what === 'image') {
+      k.images = k.images || [];
+      for (const a of args) {
+        const eq = a.indexOf('=');
+        const lhs = eq >= 0 ? a.slice(0, eq) : null, rhs = eq >= 0 ? a.slice(eq + 1) : a;
+        const at = rhs.indexOf('@');
+        const ref = at >= 0 ? rhs.slice(0, at) : rhs, digest = at >= 0 ? rhs.slice(at + 1) : null;
+        const [repo, tag] = splitImage(ref);
+        if (!repo) return c.fail(`Error: invalid format of "${a}"`, 1);
+        const m = [a, lhs, repo, tag, digest];
+        const name = m[1] || m[2];
+        const e = k.images.find(x => x.name === name) || (k.images.push({ name }), k.images[k.images.length - 1]);
+        if (m[1] && m[2] !== name) e.newName = m[2];
+        if (m[3]) e.newTag = m[3];
+        if (m[4]) e.digest = m[4];
+      }
+    } else if (sub === 'set' && what === 'namespace') k.namespace = args[0];
+    else if (sub === 'set' && what === 'replicas') { k.replicas = k.replicas || []; for (const a of args) { const [n, cnt] = a.split('='); const e = k.replicas.find(x => x.name === n); if (e) e.count = Number(cnt); else k.replicas.push({ name: n, count: Number(cnt) }); } }
+    else if (sub === 'add' && what === 'resource') { k.resources = [...new Set([...(k.resources || []), ...args])]; }
+    else return c.fail(`Error: unknown command "${[sub, what].filter(Boolean).join(' ')}" for "kustomize edit" (try: set image, set namespace, set replicas, add resource)`, 1);
+    c.host.writeFile(kpath, toYaml(k) + '\n', c.host.stat(kpath)?.owner || c.user);
+    c.uni.emit({ type: 'kustomize', host: c.host.name, cmd, sub, what, args, file: kpath });
+    return 0;
+  }
+  return c.fail(`Error: unknown command "${cmd}" for "kustomize"`, 1);
+}, { pkg: 'kustomize' });
+
+// GitHub Actions that put these CLIs on a runner
+ACTIONS['kyverno/action-install-cli'] = ({ h, uni, job }) => { installPkg(h, uni, 'kyverno', []); job.log.push('  Installed kyverno CLI v1.13.0'); return true; };
+ACTIONS['imranismail/setup-kustomize'] = ({ h, uni, job }) => { installPkg(h, uni, 'kustomize', []); job.log.push('  Installed kustomize v5.4.3'); return true; };
+ACTIONS['azure/setup-helm'] = ({ h, uni, job }) => { installPkg(h, uni, 'helm', []); job.log.push('  Installed helm v3.16.2'); return true; };

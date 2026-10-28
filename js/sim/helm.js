@@ -383,7 +383,7 @@ def('helm', c => {
     const rollbackOrDelete = reason => {
       if (mode === 'install') { removeDocs(cl, docs, ns); for (const s of cl.list('Secret', ns).filter(s => s.metadata.labels?.name === name && s.type === 'helm.sh/release.v1')) cl.remove(s); return fail(`Error: ${label}: release ${name} failed, and has been uninstalled due to atomic being set: ${reason}`); }
       finish('failed', `Upgrade "${name}" failed: ${reason}`);
-      const rb = doRollback(c, conn, cl, name, ns, last.version, { description: `Rollback to ${last.version}` }); if (rb.error) return fail(`Error: ${label}: release ${name} failed, and rolling back also failed: ${rb.error}`);
+      const rb = doRollback(c, conn, cl, name, ns, last.version, { description: `Rollback to ${last.version}`, wait: true, timeout: o.get('--timeout') }); if (rb.error) return fail(`Error: ${label}: release ${name} failed, and rolling back also failed: ${rb.error}`);
       return fail(`Error: ${label}: release ${name} failed, and has been rolled back due to atomic being set: ${reason}`);
     };
     if (ap.error) { if (o['--atomic']) return rollbackOrDelete(ap.error); finish('failed', `${mode === 'install' ? 'Release' : 'Upgrade'} "${name}" failed: ${ap.error}`); emit({ name, ok: false }); return fail(`Error: ${label}: ${ap.error}`); }

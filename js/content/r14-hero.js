@@ -1,4 +1,4 @@
-// Realm 13 · Hero Trials: capstones that combine the earlier realms. Tasks state the outcome
+// Realm 14 · Hero Trials: capstones that combine the earlier realms. Tasks state the outcome
 // that must be true, not the commands; checks look only at the end state of the world.
 
 import { kubeconfigText } from '../sim/kubectl.js';
@@ -160,7 +160,7 @@ const oncallWorld = H => {
 
 export default {
   id: 'hero',
-  n: 13,
+  n: 14,
   title: 'Hero Trials',
   tagline: 'Capstones that combine every realm: tasks say what must be true, you decide how',
   badge: 'DevOps Hero',

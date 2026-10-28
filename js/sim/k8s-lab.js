@@ -8,6 +8,7 @@ import { parseYaml } from '../git/yaml.js';
 import { installArgo } from './argocd.js';
 import { installKyverno } from './kyverno.js';
 import { createVault, installEso } from './vault.js';
+import { platformOf } from './platform.js';
 
 registerLabExtension({
   helpers: (uni, sh, H) => ({
@@ -35,6 +36,8 @@ registerLabExtension({
     // a Vault server on the network (dev mode: root token printed in the lab brief)
     vault(opts = {}) { const v = createVault(uni, opts); installPkg(uni.host('laptop'), uni, 'vault', []); return v; },
     eso(name = 'lumen') { return installEso(uni.clusters.get(name)); },
+    // the developer platform: services in the catalog plus deploy/incident history for DORA
+    platform({ services = {}, deploys = [], incidents = [] } = {}) { const P = platformOf(uni); P.created = uni.time; for (const [n, s] of Object.entries(services)) P.services.set(n, s); P.deploys.push(...deploys); P.incidents.push(...incidents); installPkg(uni.host('laptop'), uni, 'lumen-cli', []); return P; },
     kload(name, key, millicores) { uni.clusters.get(name).load[key] = millicores; },
     settle(seconds = 30) { uni.advance(seconds); },
   }),

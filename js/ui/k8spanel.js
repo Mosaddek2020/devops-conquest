@@ -5,6 +5,7 @@
 import { h, clear } from './dom.js';
 import { registerPanel } from './panelRegistry.js';
 import { podStatusText, age } from '../sim/kubectl.js';
+import { allReleases } from '../sim/helm.js';
 
 const tone = (cl, p) => {
   const s = podStatusText(cl, p);
@@ -82,6 +83,31 @@ export class ClusterView {
     const hpas = cl.list('HorizontalPodAutoscaler', ns);
     if (hpas.length) this.el.append(h('section', { class: 'gh-section' }, h('h5', {}, 'Autoscalers'),
       h('ul', { class: 'gh-list' }, hpas.map(x => h('li', {}, h('div', { class: 'row' }, h('strong', {}, x.metadata.name), h('span', { class: 'meta mono' }, `cpu ${x.status.currentUtilization ?? '?'}% / ${x.spec.metrics?.[0]?.resource?.target?.averageUtilization ?? 80}% · ${x.status.currentReplicas ?? 0} pods (${x.spec.minReplicas || 1}–${x.spec.maxReplicas})`)))))));
+
+    // GitOps, packages, policies and secrets
+    const apps = cl.crds.has('Application') ? cl.list('Application', null) : [];
+    if (apps.length) this.el.append(h('section', { class: 'gh-section' }, h('h5', {}, 'Argo CD applications'),
+      h('ul', { class: 'gh-list' }, apps.map(a => {
+        const sync = a.status?.sync?.status || 'Unknown', health = a.status?.health?.status || 'Unknown';
+        return h('li', {}, h('div', { class: 'row' },
+          h('span', {}, h('i', { class: 'dot dot-' + (sync === 'Synced' && health === 'Healthy' ? 'ok' : health === 'Degraded' || sync === 'Unknown' ? 'bad' : 'warn'), 'aria-hidden': 'true' }), h('strong', {}, a.metadata.name), h('span', { class: 'meta' }, ` → ns ${a.spec.destination?.namespace || '?'}`)),
+          h('span', { class: 'meta mono' }, `${(a.status?.sync?.revision || '').slice(0, 7)}`)),
+          h('div', { class: 'dock-tags' }, h('span', { class: 'pill ' + (sync === 'Synced' ? 'pill-ok' : 'pill-warn') }, sync), h('span', { class: 'pill ' + (health === 'Healthy' ? 'pill-ok' : health === 'Progressing' ? 'pill' : 'pill-warn') }, health), a.spec.syncPolicy?.automated ? h('span', { class: 'pill pill-accent' }, `auto${a.spec.syncPolicy.automated.selfHeal ? ' · self-heal' : ''}${a.spec.syncPolicy.automated.prune ? ' · prune' : ''}`) : h('span', { class: 'pill' }, 'manual sync'), h('span', { class: 'pill' }, `${a.spec.source?.path || ''}`)));
+      }))));
+    const rels = allReleases(cl, ns).filter(r => r.info.status !== 'superseded');
+    if (rels.length) this.el.append(h('section', { class: 'gh-section' }, h('h5', {}, 'Helm releases'),
+      h('ul', { class: 'gh-list' }, rels.map(r => h('li', {}, h('div', { class: 'row' }, h('span', {}, h('i', { class: 'dot dot-' + (r.info.status === 'deployed' ? 'ok' : 'bad'), 'aria-hidden': 'true' }), h('strong', {}, r.name), h('span', { class: 'meta' }, ` ${r.chart.metadata.name}-${r.chart.metadata.version}`)), h('span', { class: 'meta mono' }, `rev ${r.version} · ${r.info.status}`)))))));
+    const pols = cl.list('NetworkPolicy', ns);
+    if (pols.length) this.el.append(h('section', { class: 'gh-section' }, h('h5', {}, 'Network policies'),
+      h('ul', { class: 'gh-list' }, pols.map(p => h('li', {}, h('div', { class: 'row' }, h('span', { class: 'mono' }, `${p.metadata.namespace}/${p.metadata.name}`), h('span', { class: 'meta mono' }, `pods: ${Object.entries(p.spec.podSelector?.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',') || 'all'} · ${(p.spec.policyTypes || ['Ingress']).join('+')}`)))))));
+    const cpols = cl.crds.has('ClusterPolicy') ? cl.list('ClusterPolicy') : [];
+    const reports = cl.crds.has('PolicyReport') ? cl.list('PolicyReport', ns) : [];
+    if (cpols.length) this.el.append(h('section', { class: 'gh-section' }, h('h5', {}, 'Kyverno policies'),
+      h('div', { class: 'dock-tags' }, cpols.map(p => h('span', { class: 'pill ' + (String(p.spec.validationFailureAction).toLowerCase() === 'enforce' ? 'pill-accent' : '') }, `${p.metadata.name} · ${p.spec.validationFailureAction || 'Audit'}`))),
+      reports.length ? h('ul', { class: 'gh-list' }, reports.map(r => h('li', {}, h('div', { class: 'row' }, h('span', { class: 'mono' }, r.metadata.namespace), h('span', { class: 'meta mono' }, `${r.summary?.pass || 0} pass · `, h('strong', { style: { color: r.summary?.fail ? 'var(--danger, #c0392b)' : 'inherit' } }, `${r.summary?.fail || 0} fail`)))))) : null));
+    const ess = cl.crds.has('ExternalSecret') ? cl.list('ExternalSecret', ns) : [];
+    if (ess.length) this.el.append(h('section', { class: 'gh-section' }, h('h5', {}, 'External secrets'),
+      h('ul', { class: 'gh-list' }, ess.map(e => { const ok = e.status?.conditions?.[0]?.status === 'True'; return h('li', {}, h('div', { class: 'row' }, h('span', {}, h('i', { class: 'dot dot-' + (ok ? 'ok' : 'bad'), 'aria-hidden': 'true' }), h('strong', {}, e.metadata.name), h('span', { class: 'meta' }, ` → Secret ${e.spec.target?.name || e.metadata.name}`)), h('span', { class: 'meta mono' }, ok ? `synced ${e.status?.refreshTime ? age(uni, Date.parse(e.status.refreshTime) / 1000) + ' ago' : ''}` : 'error'))); }))));
 
     // warnings
     const warns = cl.events.filter(e => e.type === 'Warning' && (!ns || e.ns === ns)).slice(-4).reverse();

@@ -149,6 +149,7 @@ export function healthOf(cl, o) {
     if (st.conditions?.some(c => c.type === 'Progressing' && c.reason === 'ProgressDeadlineExceeded')) return { status: 'Degraded', message: `Deployment "${o.metadata.name}" exceeded its progress deadline` };
     if ((st.updatedReplicas || 0) < o.spec.replicas) return { status: 'Progressing', message: `Waiting for rollout to finish: ${st.updatedReplicas || 0} out of ${o.spec.replicas} new replicas have been updated...` };
     if ((st.availableReplicas || 0) < o.spec.replicas) return { status: 'Progressing', message: `Waiting for rollout to finish: ${st.availableReplicas || 0} of ${o.spec.replicas} updated replicas are available...` };
+    if ((st.replicas || 0) > o.spec.replicas) return { status: 'Progressing', message: `Waiting for rollout to finish: ${st.replicas - o.spec.replicas} old replicas are pending termination...` };
     return { status: 'Healthy' };
   }
   if (o.kind === 'StatefulSet') return (o.status?.readyReplicas || 0) >= o.spec.replicas ? { status: 'Healthy' } : { status: 'Progressing', message: `Waiting for ${o.spec.replicas - (o.status?.readyReplicas || 0)} pods to be ready...` };
@@ -273,6 +274,7 @@ function reconcileApps(cl) {
     const newRev = st.__lastSyncedRev !== r.revision;
     const drift = st.sync.status === 'OutOfSync' && !newRev;
     const needsPruneOnly = st.resources.every(x => x.status === 'Synced' || x.requiresPruning) && st.resources.some(x => x.requiresPruning);
+    if (newRev && st.sync.status === 'Synced') { st.__lastSyncedRev = r.revision; continue; }
     if (newRev && st.__failedRev !== r.revision) { const res = syncApp(cl, app, { auto: true, prune: !!auto.prune }); if (!res.ok) st.__failedRev = r.revision; }
     else if (drift && needsPruneOnly && auto.prune) syncApp(cl, app, { auto: true, prune: true });
     else if (drift && auto.selfHeal && !needsPruneOnly && uni.time - (st.__lastAttempt || 0) >= 5) syncApp(cl, app, { auto: true, prune: !!auto.prune });

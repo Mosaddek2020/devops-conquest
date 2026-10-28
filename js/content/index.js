@@ -12,6 +12,7 @@ import observability from './r09-observability.js';
 import reliability from './r10-reliability.js';
 import devsecops from './r11-devsecops.js';
 import aiops from './r12-aiops.js';
-import hero from './r13-hero.js';
+import platform from './r13-platform.js';
+import hero from './r14-hero.js';
 
-export const realms = [basecamp, linux, network, services, scripting, cicd, containers, kubernetes, iac, observability, reliability, devsecops, aiops, hero];
+export const realms = [basecamp, linux, network, services, scripting, cicd, containers, kubernetes, iac, observability, reliability, devsecops, aiops, platform, hero];

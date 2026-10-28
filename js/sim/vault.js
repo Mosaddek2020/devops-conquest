@@ -79,7 +79,7 @@ function kvPut(uni, vault, key, data, { patch = false } = {}) {
   e.current = e.versions.length;
   e.updated = uni.time;
   vault.kv.secret.set(key, e);
-  uni.emit({ type: 'vault-write', path: `secret/${key}`, version: e.current });
+  uni.emit({ type: 'vault-write', path: `secret/${key}`, version: e.current, time: uni.time });
   return { version: e.current };
 }
 

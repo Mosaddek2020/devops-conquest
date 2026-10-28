@@ -16,6 +16,7 @@ import './argocd.js';
 import './kyverno.js';
 import './vault.js';
 import './sops.js';
+import './platform.js';
 import './k8s-lab.js';
 import './cloud.js';
 import './terraform.js';

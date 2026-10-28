@@ -41,7 +41,8 @@ function walk(o, fn, path = '', top = true, re = null, inside = false) {
   if (o && typeof o === 'object') return Object.fromEntries(Object.entries(o).map(([k, v]) => { if (top && k === 'sops') return [k, v]; const enter = inside || !re || re.test(k); return [k, walk(v, fn, `${path}/${k}`, false, re, enter)]; }));
   return inside || !re ? fn(o, path) : o;
 }
-const macOf = (doc) => mix('mac:' + JSON.stringify(doc), 40);
+const stable = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(q => [q, x[q]])) : x);
+const macOf = (doc) => mix('mac:' + stable(doc), 40);
 
 function identities(c) {
   const home = c.host.users.get(c.user)?.home || '/root';

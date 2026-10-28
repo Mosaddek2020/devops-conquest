@@ -4,6 +4,7 @@ import { h, clear } from '../ui/dom.js';
 import { renderMarkdown } from '../ui/markdown.js';
 import { Replay } from '../ui/replay.js';
 import { renderDiagram } from '../ui/diagrams.js';
+import '../ui/diagrams-platform.js';
 import { Quiz } from '../ui/quiz.js';
 import { Lab } from '../lab.js';
 import { curriculum } from '../curriculum.js';

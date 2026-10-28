@@ -4,6 +4,7 @@ import '../js/sim/index.js';
 import { Session } from '../js/sim/session.js';
 import { buildLabWorld } from '../js/lab.js';
 import { stripAnsi } from '../js/git/world.js';
+import { parseYaml as parseY } from '../js/git/yaml.js';
 
 let fails = 0;
 const only = process.argv.slice(2).find(a => !a.startsWith('-'));
@@ -215,6 +216,32 @@ scenario('sops', H => { H.install('laptop', 'sops', 'age'); }, ({ run }) => {
   run('sed -i "s/name: db/name: db2/" secret.enc.yaml && sops -d secret.enc.yaml', /MAC mismatch/);
   run(W('.sops.yaml', 'creation_rules:\n  - path_regex: .*\\.enc\\.yaml$\n    encrypted_regex: ^(data|stringData)$\n    age: ' + 'PUB') + '\nsed -i "s/PUB/$(age-keygen -y key.txt)/" .sops.yaml && cp secret.yaml s2.enc.yaml && sops -e -i s2.enc.yaml && grep -c "ENC\\[" s2.enc.yaml', /^3$/m);
   run('sops s2.enc.yaml', null, null);
+});
+
+const APPSET = 'apiVersion: argoproj.io/v1alpha1\nkind: ApplicationSet\nmetadata:\n  name: apps\n  namespace: argocd\nspec:\n  generators:\n    - git:\n        repoURL: https://github.com/lumen/gitops.git\n        revision: HEAD\n        directories:\n          - path: apps/*\n  template:\n    metadata:\n      name: "{{path.basename}}"\n    spec:\n      project: default\n      source:\n        repoURL: https://github.com/lumen/gitops.git\n        targetRevision: HEAD\n        path: "{{path}}"\n      destination:\n        server: https://kubernetes.default.svc\n        namespace: "{{path.basename}}"\n      syncPolicy:\n        automated:\n          prune: true\n          selfHeal: true\n        syncOptions:\n          - CreateNamespace=true\n';
+scenario('platform', H => {
+  H.cluster('lumen', { ingress: true });
+  H.argocd('lumen', { webhook: true });
+  H.remote('lumen', 'gitops', [{ message: 'bootstrap', files: { 'bootstrap/apps.yaml': APPSET, 'apps/billing/deployment.yaml': DEP('nginx:1.27', 1).replace(/web/g, 'billing'), 'apps/billing/kustomization.yaml': 'resources:\n  - deployment.yaml\n' } }], { collaborators: ['you'] });
+  H.remote('lumen', 'billing', [{ message: 'billing', files: { 'catalog-info.yaml': 'apiVersion: backstage.io/v1alpha1\nkind: Component\nmetadata:\n  name: billing\nspec:\n  type: service\n', '.github/workflows/build.yml': 'on: push\njobs: {}\n' } }], { collaborators: ['you'] });
+  H.k8s('lumen', [parseY(APPSET)], { settle: 30 });
+  const now = H.uni.time, D = 86400;
+  H.platform({ services: { billing: { owner: null, template: null }, shop: { owner: 'team-shop', template: 'node-api' } }, deploys: [...Array.from({ length: 4 }, (_, i) => ({ service: 'billing', at: now - (25 - i * 6) * D, commitAt: now - (25 - i * 6) * D - 9 * D, ok: i !== 2 })), ...Array.from({ length: 20 }, (_, i) => ({ service: 'shop', at: now - (29 - i * 1.4) * D, commitAt: now - (29 - i * 1.4) * D - 3 * 3600, ok: i !== 7 }))], incidents: [{ service: 'billing', start: now - 13 * D, end: now - 13 * D + 30 * 3600, title: 'Invoices stuck' }, { service: 'shop', start: now - 20 * D, end: now - 20 * D + 40 * 60, title: 'Checkout 500s' }] });
+}, ({ run }) => {
+  run('lumen templates', /node-api\s+Node.js HTTP API/);
+  run('kubectl get applications -n argocd', /billing\s+Synced\s+Healthy/);
+  run('lumen catalog', /billing\s+<none>\s+\(legacy\)\s+0\/6/);
+  run('lumen scorecard billing', /✗ Has an owning team[\s\S]*✗ Runs CI on pull requests[\s\S]*✗ Has readiness and liveness probes/);
+  run('lumen create receipts --template node-api', /--owner is required/);
+  run('lumen create receipts --template node-api --owner team-payments --description "Receipts for every order"', /Opened lumen\/gitops#1: "Add receipts"/);
+  run('git clone -q https://github.com/lumen/gitops.git && cd gitops && gh pr list', /#?1\s+Add receipts/);
+  run('gh pr diff 1', /apps\/receipts\/deployment.yaml/);
+  run('gh pr merge 1 --squash', /Squashed and merged|Merged/);
+  run('sleep 40; kubectl get applications -n argocd', /receipts\s+Synced\s+Healthy/);
+  run('kubectl get pods -n receipts', /receipts-.*1\/1\s+Running/);
+  run('lumen scorecard receipts', /receipts: 6\/6/);
+  run('lumen dora shop', /Deployment frequency\s+4\.\d per week \(20 deploys\)\s+High[\s\S]*Change failure rate\s+5% \(1 of 20\)\s+Elite/);
+  run('lumen dora billing --details', /Lead time for changes\s+9\.0 days[\s\S]*Change failure rate\s+25% \(1 of 4\)[\s\S]*FAILED/);
 });
 
 process.on('exit', () => { console.log(fails ? `\n${fails} failures` : '\nall platform scenarios passed'); });

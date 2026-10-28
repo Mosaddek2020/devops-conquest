@@ -92,6 +92,7 @@ export const CATALOG = {
   sops: { version: '3.9.1', size: '36.8 MB', bins: ['sops'] },
   age: { version: '1.1.1-1', size: '3,105 kB', bins: ['age', 'age-keygen'] },
   infracost: { version: '0.10.39', size: '61.2 MB', bins: ['infracost'] },
+  'lumen-cli': { version: '2.4.0', size: '9,812 kB', bins: ['lumen'] },
   make: { version: '4.3-4.1build2', size: '180 kB', bins: ['make'] },
   sysstat: { version: '12.6.1-2', size: '486 kB', bins: ['iostat', 'mpstat', 'pidstat', 'sar'] },
   strace: { version: '6.8-0ubuntu2', size: '1,353 kB', bins: ['strace'] },

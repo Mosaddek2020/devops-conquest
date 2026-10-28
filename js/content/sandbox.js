@@ -1,7 +1,7 @@
 import { relWorld } from './r10-reliability.js';
 import devsecops from './r11-devsecops.js';
 import aiops from './r12-aiops.js';
-import hero from './r13-hero.js';
+import hero from './r14-hero.js';
 
 // Sandbox starting points. Later simulators add more (containers, clusters, cloud).
 
