@@ -39,6 +39,15 @@ status=$(curl -s "$API_URL/health" | jq -r .status)
 echo "API status: $status"
 `;
 
+
+// ---------- disks and mounts ----------
+const thumbsDev = t => t.dev('web1', 'xvdg');
+const thumbsInodes = t => { const u = t.fsUsage('web1', '/var/cache/thumbs'); return u ? u.inodesUsed / u.inodes : 1; };
+const uploadsUuid = t => t.dev('web1', 'xvdf')?.uuid;
+const fstabUploads = t => t.fstab('web1').find(e => e.file.replace(/\/$/, '') === '/srv/uploads');
+// ---------- performance ----------
+const procOn = (t, re) => [...t.host('app1').procs.values()].find(p => re.test(p.cmd)) || null;
+
 export default {
   id: 'linux',
   n: 1,
@@ -267,6 +276,94 @@ export default {
         { type: 'mc', q: 'Why do apps read settings like DATABASE_URL from the environment?', choices: ['It is faster', 'The same code runs in dev, staging and production with different settings, and secrets stay out of the code', 'Files are not allowed', 'Environment variables are encrypted'], answer: 1, explain: 'The Twelve-Factor principle: config in the environment.' },
         { type: 'tf', q: '`sudo apt install nginx` without `sudo apt update` first may install an outdated version or fail to find the package.', answer: true, explain: 'update refreshes the package lists.' },
         { type: 'type', q: 'Type the command that runs ./server.sh with PORT set to 9000 for that one command only.', accept: ['PORT=9000 ./server.sh'], model: 'PORT=9000 ./server.sh', explain: 'The variable applies only to that command.' },
+      ],
+    },
+    {
+      id: 'disks-mounts',
+      title: 'Disks, filesystems and mounts',
+      summary: 'Bytes versus inodes (df -h, df -i), cleaning safely with find -delete, block devices (lsblk, blkid), mkfs, mounting, cp -a, /etc/fstab by UUID with nofail, testing with mount -a, rebooting safely.',
+      minutes: 35,
+      lab: {
+        cwd: '~',
+        panels: ['system', 'files'],
+        systemHost: 'web1',
+        setup(H) {
+          H.server('web1');
+          H.authorize('laptop', 'dev', 'web1', 'ubuntu');
+          H.console('web1');
+          H.disk('web1', { name: 'xvdf', sizeGB: 50 });
+          const g = H.disk('web1', { name: 'xvdg', sizeGB: 1, fs: 'ext4', mount: '/var/cache/thumbs' });
+          H.user('web1', 'www-data');
+          for (let i = 0; i < 1000; i++) { H.write('web1', `/var/cache/thumbs/t${i}.png`, 'PNG'.repeat(60), { owner: 'www-data' }); if (i < 900) H.age('web1', `/var/cache/thumbs/t${i}.png`, 20 + (i % 60)); }
+          g.inodes = 1012;
+          for (const [f, gb] of [['2025-q1.tar', 6], ['2025-q2.tar', 7], ['2025-q3.tar', 8]]) { H.write('web1', `/var/www/uploads/${f}`, '', { owner: 'www-data' }); H.fakeSize('web1', `/var/www/uploads/${f}`, gb * GB); }
+          H.write('web1', '/var/www/uploads/logo.png', 'PNG logo', { owner: 'www-data' });
+          for (let k = 0; k < 4; k++) H.log('web1', 'thumbs.service', `Error: ENOSPC: no space left on device, open '/var/cache/thumbs/t${1000 + k}.png'`, { prio: 'err', ago: 60 * (4 - k) });
+        },
+        suggestions: ['ssh ubuntu@web1', 'df -h'],
+        tasks: [
+          { title: 'On `web1`, thumbnails fail with "no space left on device" (`journalctl -u thumbs`), yet `df -h` shows plenty of space. Find out what is really full', hint: 'A filesystem can also run out of inodes: `df -i`.', solution: 'df -h && df -i', test: ['ssh ubuntu@web1', 'journalctl -u thumbs -n 5', 'df -h', 'df -i'], check: t => t.events('df').some(e => e.host === 'web1' && e.inodes) },
+          { title: 'Free the inodes without touching recent thumbnails: delete the files in `/var/cache/thumbs` older than 7 days', hint: '`sudo find /var/cache/thumbs -type f -mtime +7 -delete` (preview it first without -delete).', solution: 'sudo find /var/cache/thumbs -type f -mtime +7 | wc -l && sudo find /var/cache/thumbs -type f -mtime +7 -delete && df -i /var/cache/thumbs', check: t => thumbsInodes(t) < 0.5 && t.exists('web1', '/var/cache/thumbs/t999.png') && t.exists('web1', '/var/cache/thumbs/t950.png') },
+          { title: 'A new 50 GB volume is attached to web1. Find it with `lsblk`, and create an ext4 filesystem on it', hint: 'It is the 50G disk with no partitions and no mount point. Double-check the name before mkfs: it erases.', solution: 'lsblk && sudo mkfs.ext4 /dev/xvdf', check: t => t.events('lsblk').some(e => e.host === 'web1') && t.dev('web1', 'xvdf')?.fs === 'ext4' && !!thumbsDev(t) },
+          { title: 'Mount it at `/srv/uploads` and copy the uploads from `/var/www/uploads` there, keeping owners and times', solution: 'sudo mkdir -p /srv/uploads && sudo mount /dev/xvdf /srv/uploads && sudo cp -a /var/www/uploads/. /srv/uploads/ && ls -l /srv/uploads && df -h /srv/uploads', check: t => t.mountedAt('web1', '/srv/uploads')?.dev === 'xvdf' && t.owner('web1', '/srv/uploads/logo.png') === 'www-data' && t.exists('web1', '/srv/uploads/2025-q3.tar') },
+          { title: 'Make it permanent: add `/srv/uploads` to `/etc/fstab` by UUID, with `nofail`. Prove the entry works before any reboot: unmount, then `mount -a`', hint: '`echo "UUID=$(sudo blkid -s UUID -o value /dev/xvdf) /srv/uploads ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab`, then `sudo umount /srv/uploads && sudo mount -a && findmnt /srv/uploads`.', solution: 'echo "UUID=$(sudo blkid -s UUID -o value /dev/xvdf) /srv/uploads ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab && sudo umount /srv/uploads && sudo mount -a && findmnt /srv/uploads', check: t => { const e = fstabUploads(t); return !!e && e.spec === `UUID=${uploadsUuid(t)}` && e.options.includes('nofail') && t.after(ev => ev.type === 'umount' && ev.mount === '/srv/uploads', ev => ev.type === 'mount' && ev.all && ev.ok) && t.mountedAt('web1', '/srv/uploads')?.dev === 'xvdf'; } },
+          { title: 'Reboot web1 (`sudo reboot`), log back in, and check that `/srv/uploads` came back with the files', solution: 'sudo reboot', test: ['sudo reboot', 'ssh ubuntu@web1', 'findmnt /srv/uploads && ls /srv/uploads'], check: t => t.events('reboot').some(e => e.host === 'web1' && !e.emergency) && t.mountedAt('web1', '/srv/uploads')?.dev === 'xvdf' && t.exists('web1', '/srv/uploads/logo.png') },
+        ],
+      },
+      quiz: [
+        { type: 'mc', q: 'Writes fail with "No space left on device" but `df -h` shows 3% used. What do you check next?', choices: ['The network', '`df -i`: the filesystem may be out of inodes', 'The CPU', 'Nothing: it is a bug'], answer: 1, explain: 'Every file needs an inode; tiny files can use them all.' },
+        { type: 'mc', q: 'Why reference a volume by UUID in /etc/fstab?', choices: ['It is shorter', 'Device names like /dev/xvdf can change between boots or attachments; the UUID belongs to the filesystem', 'UUIDs are faster', 'fstab requires it'], answer: 1, explain: 'blkid prints it.' },
+        { type: 'mc', q: 'What does `nofail` do in an fstab entry?', choices: ['Retries the mount forever', 'Lets the system boot normally even if this filesystem cannot be mounted', 'Prevents unmounting', 'Checks the disk'], answer: 1, explain: 'Without it, a missing data volume can drop the server into emergency mode.' },
+        { type: 'tf', q: '`mkfs.ext4` on a device that holds data asks for confirmation and keeps the files.', answer: false, explain: 'It may warn, but it erases everything. Check lsblk twice.' },
+        { type: 'mc', q: 'You wrote files into /srv/uploads, then mounted a new volume there. Where are those files now?', choices: ['Deleted', 'Hidden under the mount, still on the root filesystem; they reappear when you unmount', 'Moved to the new volume', 'In /tmp'], answer: 1, explain: 'A mount covers whatever was in the directory.' },
+        { type: 'order', q: 'Order the steps to put a new data volume into service.', items: ['Identify it with lsblk', 'Create a filesystem (mkfs)', 'Mount it and copy the data (cp -a)', 'Add it to /etc/fstab by UUID with nofail', 'Test with umount + mount -a', 'Reboot when convenient and check'], explain: 'Test fstab before the reboot, not after.' },
+        { type: 'type', q: 'Type the command that shows inode usage for every mounted filesystem.', accept: ['df -i', 'df -ih', 'df -hi', 'df --inodes'], model: 'df -i', explain: 'IUse% at 100% means no new files, whatever df -h says.' },
+      ],
+    },
+    {
+      id: 'performance',
+      title: 'Performance troubleshooting',
+      summary: 'The USE method; load average versus CPUs; vmstat (r, b, wa, si/so); iostat -x and pidstat/iotop; renice and ionice; strace -p; tcpdump; the OOM killer in dmesg.',
+      minutes: 35,
+      lab: {
+        cwd: '~',
+        panels: ['system', 'network'],
+        systemHost: 'app1',
+        setup(H) {
+          H.server('app1', { cpus: 4 });
+          H.server('db1', { packages: ['postgresql'] });
+          H.authorize('laptop', 'dev', 'app1', 'ubuntu');
+          H.authorize('laptop', 'dev', 'db1', 'ubuntu');
+          H.install('app1', 'sysstat', 'strace', 'tcpdump');
+          H.write('db1', '/etc/postgresql/16/main/postgresql.conf', "listen_addresses = '*'\nport = 5432\n");
+          H.run('sudo systemctl restart postgresql && sudo ufw allow OpenSSH && sudo ufw enable', { on: 'db1' });
+          H.proc('app1', { cmd: '/usr/bin/node /opt/shop/server.js', user: 'ubuntu', cpu: 22, mem: 180 });
+          const tar = H.proc('app1', { cmd: 'tar czf /backup/uploads-2026-01-01.tgz /var/www/uploads', user: 'root', cpu: 35, mem: 40, state: 'D' });
+          tar.io = { r: 128000, w: 41000 };
+          const w = H.proc('app1', { cmd: '/usr/bin/node /opt/worker/worker.js', user: 'ubuntu', cpu: 0.1, mem: 95 });
+          w.connectsTo = { host: 'db1', port: 5432, label: 'jobs db connect' };
+          H.write('app1', '/etc/cron.d/backup', '# nightly backup of uploads (normally done by 06:00)\n0 2 * * * root tar czf /backup/uploads-$(date +\\%F).tgz /var/www/uploads\n');
+          H.perf('app1', { load: [8.4, 6.9, 3.7], kernel: [{ msg: 'Out of memory: Killed process 3112 (report-gen) total-vm:2894112kB, anon-rss:2311020kB, file-rss:0kB, shmem-rss:0kB, UID:1000 pgtables:5012kB oom_score_adj:0', ago: 8 * 3600 }, { msg: 'oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/system.slice/report-gen.service,task=report-gen,pid=3112,uid=1000', ago: 8 * 3600 }] });
+        },
+        suggestions: ['ssh ubuntu@app1', 'uptime'],
+        tasks: [
+          { title: 'The shop on `app1` is slow. Get the big picture: load average against the number of CPUs, then what the CPUs are doing (`vmstat 1 5`)', solution: 'uptime && nproc && vmstat 1 5', test: ['ssh ubuntu@app1', 'uptime && nproc && vmstat 1 5'], check: t => t.events('perf').some(e => e.host === 'app1' && e.tool === 'vmstat') && t.ran(/\b(uptime|top|htop)\b/) && t.ran(/\b(nproc|lscpu)\b/) },
+          { title: 'High I/O wait and blocked tasks point at the disk. Which device is saturated, and which process is doing the I/O?', hint: '`iostat -x` shows %util per device; `pidstat -d` or `sudo iotop -o` shows I/O per process.', solution: 'iostat -x && pidstat -d', check: t => t.events('perf').some(e => e.host === 'app1' && e.tool === 'iostat' && e.x) && t.events('perf').some(e => e.host === 'app1' && ((e.tool === 'pidstat' && e.io) || e.tool === 'iotop')) },
+          { title: 'It is the nightly backup, running late into business hours. Do not kill it: put its I/O in the idle class and lower its CPU priority, then check the disk recovers', hint: '`sudo ionice -c3 -p PID` and `sudo renice -n 10 -p PID` (`pgrep -f "tar czf"` finds the PID).', solution: 'sudo ionice -c3 -p $(pgrep -f "tar czf") && sudo renice -n 10 -p $(pgrep -f "tar czf") && iostat -x', check: t => { const p = procOn(t, /tar czf/); return !!p && p.ioClass === 'idle' && (p.nice || 0) >= 10 && t.perfNow('app1').util < 50 && t.after(e => e.type === 'ionice', e => e.type === 'perf' && e.tool === 'iostat'); } },
+          { title: 'Orders are piling up: the queue worker (`worker.js`) uses no CPU and logs nothing. Attach `strace` to it. What is it waiting for?', solution: 'sudo strace -p $(pgrep -f worker.js)', check: t => t.events('strace').some(e => e.host === 'app1' && /worker\.js/.test(e.cmd)) },
+          { title: 'Confirm with `tcpdump` what happens to its packets to db1:5432, then fix db1\'s firewall so that only app1 may connect to PostgreSQL. The worker connects again', hint: 'SYNs with no reply: a firewall drops them. On db1: `sudo ufw allow from <app1 IP> to any port 5432` (`hostname -I` on app1 prints its IP).', solution: 'sudo tcpdump -n -i eth0 port 5432 -c 4; exit; ssh ubuntu@db1 "sudo ufw allow from 10.0.0.11 to any port 5432"', test: ['sudo tcpdump -n -i eth0 port 5432 -c 4', t => `exit`, t => `ssh ubuntu@db1 "sudo ufw allow from ${t.host('app1').ip} to any port 5432"`, 'ssh ubuntu@app1 "sudo tcpdump -n port 5432 -c 3"'], check: t => t.events('tcpdump').some(e => e.host === 'app1' && e.port === 5432) && !t.reach('app1', 'db1', 5432).error && t.fw('db1').rules.some(r => (r.port === 5432 || (r.ports || []).includes(5432)) && r.action === 'allow' && r.from && r.from !== 'any' && r.from !== '0.0.0.0/0') },
+          { title: 'Last night the report generator died without a word in its own logs. Find out in the kernel log what killed it, and why', hint: '`sudo dmesg -T | grep -i kill`, or `journalctl -k`.', solution: 'sudo dmesg -T | grep -i -A1 killed', test: ['ssh ubuntu@app1', 'sudo dmesg -T | grep -i -A1 killed'], check: t => t.events('dmesg').some(e => e.host === 'app1') || t.ran(/journalctl\b.*(-k|--dmesg)/) },
+        ],
+      },
+      quiz: [
+        { type: 'mc', q: 'Load average is 8 on a 4-CPU machine and the CPUs are 70% idle. What is most likely?', choices: ['CPU-bound work', 'Tasks waiting on I/O (disk or network filesystem), which count towards load', 'A broken clock', 'Too much free memory'], answer: 1, explain: 'Load counts runnable and uninterruptible (D state) tasks.' },
+        { type: 'mc', q: 'In `vmstat`, which columns point to a disk bottleneck?', choices: ['us and sy', 'b (blocked) and wa (I/O wait)', 'si and so', 'in and cs'], answer: 1, explain: 'si/so mean swapping; r > CPUs means a CPU queue.' },
+        { type: 'mc', q: '`iostat -x` shows xvda at 99.8% %util with await 400 ms. What next?', choices: ['Add CPUs', 'Find the process doing the I/O with pidstat -d or iotop', 'Restart the app', 'Increase swap'], answer: 1, explain: 'Device first, then process, then what it is doing.' },
+        { type: 'mc', q: 'What does `ionice -c3 -p PID` do?', choices: ['Kills the process', 'Puts its disk I/O in the idle class, so it only uses the disk when nobody else needs it', 'Doubles its I/O speed', 'Pins it to CPU 3'], answer: 1, explain: 'renice does the same for CPU time.' },
+        { type: 'predict', q: 'strace on a stuck worker repeats this. What is wrong?', code: 'connect(12, {sin_port=htons(5432), sin_addr=inet_addr("10.0.0.12")}, 16) = -1 EINPROGRESS\npoll([{fd=12, events=POLLOUT}], 1, 5000) = 0 (Timeout)', choices: ['The disk is full', 'It cannot reach port 5432 on 10.0.0.12: packets are probably dropped by a firewall', 'Out of memory', 'A syntax error'], answer: 1, explain: 'A refused port would return ECONNREFUSED immediately.' },
+        { type: 'tf', q: 'In tcpdump, a SYN answered by RST means a firewall is silently dropping packets.', answer: false, explain: 'RST = nothing listens (refused). Silence after SYN = dropped.' },
+        { type: 'mc', q: 'Where do you find out that the OOM killer ended a process?', choices: ['In the process\'s own log', 'In the kernel log: dmesg -T or journalctl -k', 'In /etc/fstab', 'In the shell history'], answer: 1, explain: 'The killed process gets no chance to log anything.' },
+        { type: 'order', q: 'Order a USE-style investigation.', items: ['Whole machine: load, vmstat', 'Saturated resource: iostat / top / free', 'Responsible process: pidstat / iotop', 'What it does: strace / tcpdump', 'Fix with the least damage, then verify'], explain: 'Measure from the outside in, before changing anything.' },
       ],
     },
     {

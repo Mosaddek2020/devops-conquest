@@ -218,21 +218,26 @@ function copyTree(c, f, src, dst, { move = false, recursive = false, preserve = 
   const st = host.stat(sa);
   if (!st) throw new SimError(`${c.name}: cannot stat '${src}': No such file or directory`);
   let da = f.abs(dst);
-  if (host.stat(da)?.type === 'dir') da = normPath(da + '/' + basename(sa));
+  // "src/." copies the directory's contents, not the directory
+  const contents = /\/\.$/.test(src) && st.type === 'dir' && host.stat(da)?.type === 'dir';
+  if (host.stat(da)?.type === 'dir' && !contents) da = normPath(da + '/' + basename(sa));
   if (da === sa || da.startsWith(sa + '/')) throw new SimError(`${c.name}: cannot ${move ? 'move' : 'copy'} a directory, '${src}', into itself, '${dst}'`);
   if (st.type === 'dir') {
     if (!recursive && !move) throw new SimError(`cp: -r not specified; omitting directory '${src}'`);
     const parent = dirname(da);
     if (!host.isDir(parent)) throw new SimError(`${c.name}: cannot create directory '${dst}': No such file or directory`);
-    if (!access(host, c.user, parent, 'w')) throw new SimError(`${c.name}: cannot create directory '${dst}': Permission denied`);
-    host.mkdirMeta(da, c.user, st.mode);
+    if (!access(host, c.user, contents ? da : parent, 'w')) throw new SimError(`${c.name}: cannot create directory '${dst}': Permission denied`);
+    if (!contents) host.mkdirMeta(da, c.user, st.mode);
+    const keep = (from, to) => { const m = host.meta.get(from); if (m && (preserve || move)) host.setMeta(to, { owner: m.owner, group: m.group, mode: m.mode }); };
+    if (!contents) keep(sa, da);
+    for (const d of [...host.dirs].filter(d => d.startsWith(sa + '/'))) { host.mkdirMeta(da + d.slice(sa.length), c.user); keep(d, da + d.slice(sa.length)); }
     for (const p of [...host.files.keys()].filter(p => p.startsWith(sa + '/'))) {
       const np = da + p.slice(sa.length);
       host.writeFile(np, host.files.get(p), c.user);
       const m = host.meta.get(p);
-      if (m) host.meta.set(np, { ...m, owner: preserve || move ? m.owner : c.user, mtime: c.uni.time });
+      if (m) host.meta.set(np, { ...m, owner: preserve || move ? m.owner : c.user, mtime: preserve || move ? m.mtime : c.uni.time });
+      if (host.fakeSizes?.has(p)) host.fakeSizes.set(np, host.fakeSizes.get(p));
     }
-    for (const d of [...host.dirs].filter(d => d.startsWith(sa + '/'))) host.mkdirMeta(da + d.slice(sa.length), c.user);
     if (move) { if (host.repos.has(sa)) { const r = host.repos.get(sa); host.repos.delete(sa); r.root = da; host.repos.set(da, r); } f.remove(src, { recursive: true }); }
     return;
   }
@@ -511,12 +516,13 @@ def('df', c => {
   const o = opts(c.args, { bool: 'hTi', val: [] });
   const h = c.host;
   const G = 1073741824;
-  const mounts = h.mounts || [{ fs: '/dev/sda1', type: 'ext4', size: h.diskGB * G, used: h.diskUsedGB * G, mount: '/' }, { fs: 'tmpfs', type: 'tmpfs', size: 0.5 * G, used: 0.001 * G, mount: '/run' }];
+  const mounts = h.mounts || h.mountsFn?.() || [{ fs: '/dev/sda1', type: 'ext4', size: h.diskGB * G, used: h.diskUsedGB * G, mount: '/' }, { fs: 'tmpfs', type: 'tmpfs', size: 0.5 * G, used: 0.001 * G, mount: '/run' }];
   const paths = o._.length ? o._.map(p => c.resolve(p)) : null;
   const shown = paths ? [...new Set(paths.map(p => [...mounts].sort((x, y) => y.mount.length - x.mount.length).find(m => p === m.mount || p.startsWith(m.mount === '/' ? '/' : m.mount + '/'))))].filter(Boolean) : mounts;
-  if (o['-i']) { c.print('Filesystem      Inodes  IUsed   IFree IUse% Mounted on'); for (const m of mounts) c.print(`${m.fs.padEnd(14)} ${String(2621440).padStart(7)} ${String(m.inodesUsed ?? 184211).padStart(6)} ${String(2621440 - (m.inodesUsed ?? 184211)).padStart(7)} ${String(Math.round(((m.inodesUsed ?? 184211) / 2621440) * 100)).padStart(4)}% ${m.mount}`); return 0; }
+  if (o['-i']) { c.print('Filesystem       Inodes   IUsed    IFree IUse% Mounted on'); for (const m of shown) { const tot = m.inodes ?? 2621440, used = Math.min(tot, m.inodesUsed ?? 184211); c.print(`${m.fs.padEnd(14)} ${String(tot).padStart(8)} ${String(used).padStart(7)} ${String(tot - used).padStart(8)} ${String(Math.round((used / tot) * 100)).padStart(4)}% ${m.mount}`); } c.uni.emit({ type: 'df', host: h.name, inodes: true }); return 0; }
   const fmt = n => o['-h'] ? humanSize(n) : String(Math.round(n / 1024));
   c.print(`Filesystem     ${o['-T'] ? 'Type  ' : ''}${o['-h'] ? ' Size  Used Avail' : '1K-blocks     Used Available'} Use% Mounted on`);
+  c.uni.emit({ type: 'df', host: h.name, inodes: false });
   for (const m of shown) c.print(`${m.fs.padEnd(14)} ${o['-T'] ? m.type.padEnd(6) : ''}${fmt(m.size).padStart(o['-h'] ? 5 : 9)} ${fmt(m.used).padStart(o['-h'] ? 5 : 8)} ${fmt(Math.max(0, m.size - m.used)).padStart(o['-h'] ? 5 : 9)} ${String(Math.min(100, Math.round((m.used / m.size) * 100))).padStart(3)}% ${m.mount}`);
   return 0;
 });

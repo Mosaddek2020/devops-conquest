@@ -235,7 +235,7 @@ def(['top', 'htop'], c => {
   const busy = Math.min(100 * host.cpus, host.cpuBusy());
   c.print(`top - ${fmtDate(c.uni.time, '%T')} up 12 days,  3:04,  1 user,  load average: ${host.loadAvg.map(x => x.toFixed(2)).join(', ')}`,
     `Tasks: ${rows.length + 40} total,   1 running, ${rows.length + 39} sleeping,   0 stopped,   ${rows.filter(p => p.state === 'Z').length} zombie`,
-    `%Cpu(s): ${(busy / host.cpus).toFixed(1).padStart(4)} us,  0.7 sy,  0.0 ni, ${Math.max(0, 100 - busy / host.cpus).toFixed(1)} id,  0.1 wa,  0.0 hi,  0.0 si,  0.0 st`,
+    (ps => ps ? `%Cpu(s): ${ps.us.toFixed(1).padStart(4)} us, ${ps.sy.toFixed(1).padStart(4)} sy,  0.0 ni, ${ps.id.toFixed(1).padStart(4)} id, ${ps.wa.toFixed(1).padStart(4)} wa,  0.0 hi,  0.0 si,  0.0 st` : `%Cpu(s): ${(busy / host.cpus).toFixed(1).padStart(4)} us,  0.7 sy,  0.0 ni, ${Math.max(0, 100 - busy / host.cpus).toFixed(1)} id,  0.1 wa,  0.0 hi,  0.0 si,  0.0 st`)(host.perfStats?.()),
     `MiB Mem : ${host.memMB.toFixed(1).padStart(7)} total, ${Math.max(0, host.memMB - used).toFixed(1).padStart(7)} free, ${used.toFixed(1).padStart(7)} used, ${(host.memMB * 0.12).toFixed(1).padStart(7)} buff/cache`,
     `MiB Swap: ${(host.swapMB || 0).toFixed(1).padStart(7)} total, ${((host.swapMB || 0) - (host.swapUsedMB || 0)).toFixed(1).padStart(7)} free, ${(host.swapUsedMB || 0).toFixed(1).padStart(7)} used. ${Math.max(0, host.memMB - used).toFixed(1).padStart(7)} avail Mem`,
     '',
