@@ -11,9 +11,11 @@ import { parseRef, baseFor, snapshotFiles } from './docker-images.js';
 import { httpRequest, connect } from './net.js';
 import { Session } from './session.js';
 import { stripAnsi } from '../git/world.js';
+import { installNetPolicy } from './netpol.js';
 
-export const API_VERSIONS = { Pod: 'v1', Service: 'v1', ConfigMap: 'v1', Secret: 'v1', Namespace: 'v1', Node: 'v1', PersistentVolumeClaim: 'v1', Endpoints: 'v1', Event: 'v1', Deployment: 'apps/v1', ReplicaSet: 'apps/v1', StatefulSet: 'apps/v1', DaemonSet: 'apps/v1', Ingress: 'networking.k8s.io/v1', HorizontalPodAutoscaler: 'autoscaling/v2', Job: 'batch/v1', CronJob: 'batch/v1' };
-export const CLUSTER_SCOPED = new Set(['Namespace', 'Node']);
+export const API_VERSIONS = { Pod: 'v1', Service: 'v1', ConfigMap: 'v1', Secret: 'v1', Namespace: 'v1', Node: 'v1', PersistentVolumeClaim: 'v1', Endpoints: 'v1', Event: 'v1', ServiceAccount: 'v1', ResourceQuota: 'v1', Deployment: 'apps/v1', ReplicaSet: 'apps/v1', StatefulSet: 'apps/v1', DaemonSet: 'apps/v1', Ingress: 'networking.k8s.io/v1', NetworkPolicy: 'networking.k8s.io/v1', HorizontalPodAutoscaler: 'autoscaling/v2', Job: 'batch/v1', CronJob: 'batch/v1', Role: 'rbac.authorization.k8s.io/v1', ClusterRole: 'rbac.authorization.k8s.io/v1', RoleBinding: 'rbac.authorization.k8s.io/v1', ClusterRoleBinding: 'rbac.authorization.k8s.io/v1', CustomResourceDefinition: 'apiextensions.k8s.io/v1' };
+// cluster-scoped kinds; installing a CRD with scope: Cluster adds its kind here
+export const CLUSTER_SCOPED = new Set(['Namespace', 'Node', 'ClusterRole', 'ClusterRoleBinding', 'CustomResourceDefinition']);
 const ALPHA = 'bcdfghjklmnpqrstvwxz2456789';
 let nameSeq = 7;
 export const suffix = (n = 5) => { let s = ''; for (let i = 0; i < n; i++) { nameSeq = (nameSeq * 1103515245 + 12345) >>> 0; s += ALPHA[(nameSeq >>> 8) % ALPHA.length]; } return s; };
@@ -25,6 +27,7 @@ const hashOf = text => {
   return s;
 };
 export const clone = o => JSON.parse(JSON.stringify(o));
+export const stableJson = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(q => [q, x[q]])) : x);
 
 // quantities: CPU in millicores, memory in MiB
 export function cpuMilli(q) { if (q === undefined || q === null || q === '') return 0; const s = String(q); return s.endsWith('m') ? Number(s.slice(0, -1)) : Math.round(Number(s) * 1000); }
@@ -55,6 +58,10 @@ export class Cluster {
     this.created = uni.time - 86400 * 3;
     this.uidSeq = 1;
     this.svcSeq = 20; this.nodePortSeq = 30080; this.lbSeq = 200;
+    this.crds = new Map();        // kind -> { group, versions, plural, singular, shortNames, scope }
+    this.admission = [];          // (obj, { op, file }) -> { error } | { warnings } | null (Kyverno and friends)
+    this.controllers = [];        // extra reconcilers (Argo CD, External Secrets, policy reports)
+    this.saTokens = new Map();    // token -> { user, groups } for service-account tokens
     // control plane: the API server kubectl talks to
     this.cp = uni.addHost(`${name}-control-plane`, { ip: ip || undefined, kind: 'vm' });
     this.cp.hidden = true; this.cp.cluster = name;
@@ -64,7 +71,8 @@ export class Cluster {
     this.put({ kind: 'Node', metadata: { name: this.cp.name, labels: { 'node-role.kubernetes.io/control-plane': '', 'kubernetes.io/hostname': this.cp.name } }, spec: { taints: [{ key: 'node-role.kubernetes.io/control-plane', effect: 'NoSchedule' }] }, status: { capacity: { cpu: '2', memory: '4Gi', pods: '110' }, allocatable: { cpu: '2', memory: '4Gi', pods: '110' }, nodeInfo: { kubeletVersion: version }, addresses: [{ type: 'InternalIP', address: this.cp.ip }] } }, { at: this.created });
     this.nodes = [];
     for (let i = 0; i < nodes; i++) this.addNode({ cpu: nodeCpu, memMi: nodeMemMi });
-    for (const ns of ['default', 'kube-system', 'kube-public', 'kube-node-lease']) this.put({ kind: 'Namespace', metadata: { name: ns } }, { at: this.created });
+    for (const ns of ['default', 'kube-system', 'kube-public', 'kube-node-lease']) { const o = this.put({ kind: 'Namespace', metadata: { name: ns } }, { at: this.created }); this.onCreate(o, { quiet: true }); }
+    installDefaultRbac(this);
     this.put({ kind: 'Service', metadata: { name: 'kubernetes', namespace: 'default', labels: { component: 'apiserver', provider: 'kubernetes' } }, spec: { type: 'ClusterIP', clusterIP: '10.96.0.1', ports: [{ name: 'https', port: 443, protocol: 'TCP', targetPort: 6443 }] } }, { at: this.created });
     // the cluster's own components, shown by kubectl -n kube-system (not simulated in depth)
     const cpNode = { name: this.cp.name, host: this.cp, eng: null, cpu: 2000, memMi: 4096, system: true };
@@ -131,8 +139,8 @@ export class Cluster {
   apply(input, { ns: defNs = 'default', manager = 'kubectl' } = {}) {
     const obj = clone(input);
     if (!obj || typeof obj !== 'object' || !obj.kind) return { error: 'error: error validating data: [apiVersion not set, kind not set]; if you choose to ignore these errors, turn validation off with --validate=false' };
-    const want = API_VERSIONS[obj.kind];
-    if (!want || obj.apiVersion !== want) return { error: `error: resource mapping not found for name: "${obj.metadata?.name || ''}" namespace: "${obj.metadata?.namespace || ''}" from "${input.__file || '-'}": no matches for kind "${obj.kind}" in version "${obj.apiVersion}"\nensure CRDs are installed first` };
+    const want = this.apiVersionOf(obj.kind);
+    if (!want || ![].concat(want).includes(obj.apiVersion)) return { error: `error: resource mapping not found for name: "${obj.metadata?.name || ''}" namespace: "${obj.metadata?.namespace || ''}" from "${input.__file || '-'}": no matches for kind "${obj.kind}" in version "${obj.apiVersion}"\nensure CRDs are installed first` };
     delete obj.__file;
     if (!obj.metadata?.name) return { error: `error: error validating "${input.__file || '-'}": error validating data: ValidationError(${obj.kind}.metadata): missing required field "name"` };
     if (!CLUSTER_SCOPED.has(obj.kind)) obj.metadata.namespace = obj.metadata.namespace || defNs;
@@ -148,6 +156,11 @@ export class Cluster {
       if (psa) warnings.push(`Warning: would violate ${psa.text.replace(/^violates /, '')}`);
     }
     const cur = this.get(obj.kind, obj.metadata.namespace, obj.metadata.name);
+    for (const hook of this.admission) {
+      const r = hook(obj, { op: cur ? 'UPDATE' : 'CREATE', file: input.__file || '-', old: cur });
+      if (r?.error) return { error: r.error };
+      if (r?.warnings) warnings.push(...r.warnings);
+    }
     if (!cur) {
       this.defaults(obj);
       this.put(obj);
@@ -155,12 +168,12 @@ export class Cluster {
       return { verb: 'created', obj, warnings };
     }
     // three-way merge, simplified: the applied fields replace the live ones
-    if (obj.kind === 'Deployment' && JSON.stringify(cur.spec.selector) !== JSON.stringify(obj.spec.selector)) return { error: `The Deployment "${obj.metadata.name}" is invalid: spec.selector: Invalid value: v1.LabelSelector{MatchLabels:map[string]string{${Object.entries(obj.spec.selector?.matchLabels || {}).map(([k, v]) => `"${k}":"${v}"`).join(', ')}}}: field is immutable` };
+    if (obj.kind === 'Deployment' && stableJson(cur.spec.selector) !== stableJson(obj.spec.selector)) return { error: `The Deployment "${obj.metadata.name}" is invalid: spec.selector: Invalid value: v1.LabelSelector{MatchLabels:map[string]string{${Object.entries(obj.spec.selector?.matchLabels || {}).map(([k, v]) => `"${k}":"${v}"`).join(', ')}}}: field is immutable` };
     this.defaults(obj, cur);
     const before = JSON.stringify([cur.spec, cur.data, cur.stringData, cur.metadata.labels, cur.metadata.annotations]);
     for (const k of Object.keys(obj)) if (!['metadata', 'status'].includes(k)) cur[k] = obj[k];
     for (const k of Object.keys(cur)) if (!(k in obj) && !['metadata', 'status', 'apiVersion', 'kind'].includes(k)) delete cur[k];
-    cur.metadata.labels = obj.metadata.labels || {};
+    cur.metadata.labels = { ...(cur.kind === 'Namespace' ? { 'kubernetes.io/metadata.name': cur.metadata.name } : {}), ...(obj.metadata.labels || {}) };
     cur.metadata.annotations = { ...(obj.metadata.annotations || {}), ...Object.fromEntries(Object.entries(cur.metadata.annotations || {}).filter(([k]) => k.startsWith('deployment.kubernetes.io/'))) };
     const after = JSON.stringify([cur.spec, cur.data, cur.stringData, cur.metadata.labels, cur.metadata.annotations]);
     if (before === after) return { verb: 'unchanged', obj: cur, warnings };
@@ -259,11 +272,34 @@ export class Cluster {
       if (o.stringData) { o.data = { ...(o.data || {}), ...Object.fromEntries(Object.entries(o.stringData).map(([k, v]) => [k, btoa(String(v))])) }; delete o.stringData; }
     }
     if (o.kind === 'PersistentVolumeClaim') { o.spec.storageClassName = o.spec.storageClassName || 'standard'; o.spec.volumeMode = 'Filesystem'; }
-    if (o.kind === 'Pod') { o.spec.restartPolicy = o.spec.restartPolicy || 'Always'; o.spec.terminationGracePeriodSeconds = o.spec.terminationGracePeriodSeconds ?? 30; }
+    if (o.kind === 'Pod') { o.spec.serviceAccountName = o.spec.serviceAccountName || 'default'; o.spec.restartPolicy = o.spec.restartPolicy || 'Always'; o.spec.terminationGracePeriodSeconds = o.spec.terminationGracePeriodSeconds ?? 30; }
     if (o.kind === 'Job') { o.spec.backoffLimit = o.spec.backoffLimit ?? 6; o.spec.completions = o.spec.completions ?? 1; o.spec.template.spec.restartPolicy = o.spec.template.spec.restartPolicy || 'Never'; }
   }
 
-  onCreate(o) {
+  apiVersionOf(kind) { if (API_VERSIONS[kind]) return API_VERSIONS[kind]; const c = this.crds.get(kind); return c ? c.versions.map(v => `${c.group}/${v}`) : null; }
+  // what kubectl calls a resource: plural name and API group
+  resourceOf(kind) {
+    const c = this.crds.get(kind);
+    if (c) return { resource: c.plural, group: c.group };
+    const av = API_VERSIONS[kind] || 'v1';
+    const plural = { Endpoints: 'endpoints', Ingress: 'ingresses', NetworkPolicy: 'networkpolicies', HorizontalPodAutoscaler: 'horizontalpodautoscalers', PersistentVolumeClaim: 'persistentvolumeclaims', ResourceQuota: 'resourcequotas', CustomResourceDefinition: 'customresourcedefinitions' }[kind] || kind.toLowerCase() + 's';
+    return { resource: plural, group: av.includes('/') ? av.split('/')[0] : '' };
+  }
+  registerCrd(o) {
+    const sp = o.spec || {};
+    const kind = sp.names?.kind;
+    if (!kind) return;
+    this.crds.set(kind, { group: sp.group, versions: (sp.versions || []).map(v => v.name), plural: sp.names.plural, singular: sp.names.singular || kind.toLowerCase(), shortNames: sp.names.shortNames || [], scope: sp.scope || 'Namespaced', columns: sp.columns || null });
+    if (sp.scope === 'Cluster') CLUSTER_SCOPED.add(kind);
+  }
+
+  onCreate(o, { quiet = false } = {}) {
+    if (o.kind === 'CustomResourceDefinition') this.registerCrd(o);
+    if (o.kind === 'Namespace') {
+      o.metadata.labels = { 'kubernetes.io/metadata.name': o.metadata.name, ...(o.metadata.labels || {}) };
+      if (!this.get('ServiceAccount', o.metadata.name, 'default')) this.put({ kind: 'ServiceAccount', metadata: { name: 'default', namespace: o.metadata.name } }, { at: o.metadata.creationTimestamp });
+    }
+    if (quiet) { if (o.kind === 'Namespace') o.status = { phase: 'Active' }; return; }
     if (o.kind === 'Deployment') this.event(o, 'Normal', 'Created', `deployment ${o.metadata.name} created`);
     if (o.kind === 'PersistentVolumeClaim') { o.status = { phase: 'Bound', capacity: { storage: o.spec.resources?.requests?.storage || '1Gi' }, accessModes: o.spec.accessModes || ['ReadWriteOnce'] }; o.spec.volumeName = `pvc-${o.metadata.uid}`; if (!this.volumes.has(`${o.metadata.namespace}/${o.metadata.name}`)) this.volumes.set(`${o.metadata.namespace}/${o.metadata.name}`, null); }
     if (o.kind === 'Pod') this.rt.set(o.metadata.uid, newRuntime(o));
@@ -271,6 +307,7 @@ export class Cluster {
     this.uni.emit({ type: 'k8s-apply', cluster: this.name, kind: o.kind, ns: o.metadata.namespace, name: o.metadata.name, verb: 'created' });
   }
   onUpdate(o) {
+    if (o.kind === 'CustomResourceDefinition') this.registerCrd(o);
     if (o.kind === 'Pod') { const rt = this.rt.get(o.metadata.uid); if (rt) for (const c of o.spec.containers) { const r = rt.containers.find(x => x.name === c.name); if (r && r.image !== c.image) { r.image = c.image; r.want = 'restart'; } } }
     this.uni.emit({ type: 'k8s-apply', cluster: this.name, kind: o.kind, ns: o.metadata.namespace, name: o.metadata.name, verb: 'configured' });
   }
@@ -317,6 +354,7 @@ export class Cluster {
     for (const s of this.list('Service')) this.syncService(s);
     for (const h of this.list('HorizontalPodAutoscaler')) this.syncHPA(h);
     for (const i of this.list('Ingress')) if (this.ingressHost && !i.status.loadBalancer?.ingress) i.status.loadBalancer = { ingress: [{ ip: this.ingressHost.ip }] };
+    for (const ctl of this.controllers) { try { ctl(this); } catch (e) { console.error('controller failed', e); } }
   }
 
   templateHash(tpl) { const t = clone(tpl); if (t.metadata?.labels) delete t.metadata.labels['pod-template-hash']; return hashOf(JSON.stringify(t)); }
@@ -850,7 +888,7 @@ export class Cluster {
     let srt = this.svcRt.get(s.metadata.uid);
     if (!srt) {
       const host = new Host(this.uni, `svc-${s.metadata.name}.${s.metadata.namespace}`, { ip: s.spec.clusterIP, kind: 'service', withWww: false, user: 'root' });
-      host.cluster = this.name; host.clusterOnly = this.name; host.hidden = true;
+      host.cluster = this.name; host.clusterOnly = this.name; host.hidden = true; host.k8sSvc = s;
       host.procs.clear();
       const proc = host.addProc({ cmd: 'kube-proxy', user: 'root', mem: 1 });
       this.uni.byIp.set(s.spec.clusterIP, host);
@@ -906,9 +944,9 @@ export class Cluster {
   // ---------------------------------------------------------------- ingress
   installIngress(ip) {
     if (this.ingressHost) return this.ingressHost;
-    this.put({ kind: 'Namespace', metadata: { name: 'ingress-nginx' } }, { at: this.created });
+    this.onCreate(this.put({ kind: 'Namespace', metadata: { name: 'ingress-nginx' } }, { at: this.created }), { quiet: true });
     const h = this.uni.addHost('ingress-nginx', { kind: 'vm', ip: ip || undefined });
-    h.hidden = true; h.cluster = this.name;
+    h.hidden = true; h.cluster = this.name; h.k8sPeer = { ns: 'ingress-nginx', labels: { 'app.kubernetes.io/name': 'ingress-nginx', 'app.kubernetes.io/component': 'controller' } };
     for (const pr0 of [...h.procs.values()]) if (pr0.pid !== 1) h.killProc(pr0.pid);
     h.listening.clear();
     const self = this;
@@ -999,11 +1037,27 @@ function qos(p) {
   return 'BestEffort';
 }
 
+// the roles every cluster ships with, and the binding that makes system:masters all-powerful
+const CORE_RES = ['pods', 'pods/log', 'services', 'endpoints', 'configmaps', 'persistentvolumeclaims', 'serviceaccounts', 'events'];
+const APP_RES = ['deployments', 'deployments/scale', 'replicasets', 'statefulsets', 'daemonsets'];
+const READ = ['get', 'list', 'watch'], WRITE = ['create', 'update', 'patch', 'delete', 'deletecollection'];
+export const DEFAULT_CLUSTER_ROLES = {
+  'cluster-admin': [{ apiGroups: ['*'], resources: ['*'], verbs: ['*'] }],
+  admin: [{ apiGroups: ['', 'apps', 'batch', 'autoscaling', 'networking.k8s.io', 'policy', 'rbac.authorization.k8s.io'], resources: ['*'], verbs: ['*'] }],
+  edit: [{ apiGroups: [''], resources: [...CORE_RES, 'secrets', 'pods/exec', 'pods/portforward'], verbs: [...READ, ...WRITE] }, { apiGroups: ['apps'], resources: APP_RES, verbs: [...READ, ...WRITE] }, { apiGroups: ['batch'], resources: ['jobs', 'cronjobs'], verbs: [...READ, ...WRITE] }, { apiGroups: ['networking.k8s.io'], resources: ['ingresses', 'networkpolicies'], verbs: [...READ, ...WRITE] }, { apiGroups: ['autoscaling'], resources: ['horizontalpodautoscalers'], verbs: [...READ, ...WRITE] }],
+  view: [{ apiGroups: [''], resources: CORE_RES, verbs: READ }, { apiGroups: ['apps'], resources: APP_RES, verbs: READ }, { apiGroups: ['batch'], resources: ['jobs', 'cronjobs'], verbs: READ }, { apiGroups: ['networking.k8s.io'], resources: ['ingresses', 'networkpolicies'], verbs: READ }, { apiGroups: ['autoscaling'], resources: ['horizontalpodautoscalers'], verbs: READ }],
+};
+function installDefaultRbac(cl) {
+  for (const [name, rules] of Object.entries(DEFAULT_CLUSTER_ROLES)) cl.put({ kind: 'ClusterRole', metadata: { name, labels: { 'kubernetes.io/bootstrapping': 'rbac-defaults' } }, rules }, { at: cl.created });
+  cl.put({ kind: 'ClusterRoleBinding', metadata: { name: 'cluster-admin', labels: { 'kubernetes.io/bootstrapping': 'rbac-defaults' } }, roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'cluster-admin' }, subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'Group', name: 'system:masters' }] }, { at: cl.created });
+}
+
 export function installK8sTicker(uni) {
   uni.tickers.push(() => { for (const c of uni.clusters.values()) { try { c.reconcile(); } catch (e) { console.error('k8s reconcile failed', e); } } });
 }
 
 export function createCluster(uni, name, opts = {}) {
+  installNetPolicy(uni);
   const c = new Cluster(uni, name, opts);
   uni.clusters.set(name, c);
   return c;

@@ -9,6 +9,8 @@ import { Session } from './session.js';
 import { normPath, dirname, basename } from './host.js';
 import { API_VERSIONS, CLUSTER_SCOPED, clone, cpuMilli, memMi, parseSelector, selects, suffix, iso, podRequests } from './k8s.js';
 import { syncVolumes } from './docker.js';
+import { identityFor, saIdentity, authorize, forbidden, rulesFor, issueToken } from './rbac.js';
+import { kustomizeBuild, hostFiles } from './kustomize.js';
 
 const KINDS = {
   po: 'Pod', pod: 'Pod', pods: 'Pod',
@@ -26,9 +28,31 @@ const KINDS = {
   ev: 'Event', event: 'Event', events: 'Event',
   pvc: 'PersistentVolumeClaim', persistentvolumeclaim: 'PersistentVolumeClaim', persistentvolumeclaims: 'PersistentVolumeClaim',
   job: 'Job', jobs: 'Job',
+  cj: 'CronJob', cronjob: 'CronJob', cronjobs: 'CronJob',
+  sa: 'ServiceAccount', serviceaccount: 'ServiceAccount', serviceaccounts: 'ServiceAccount',
+  role: 'Role', roles: 'Role', 'roles.rbac.authorization.k8s.io': 'Role',
+  clusterrole: 'ClusterRole', clusterroles: 'ClusterRole',
+  rolebinding: 'RoleBinding', rolebindings: 'RoleBinding',
+  clusterrolebinding: 'ClusterRoleBinding', clusterrolebindings: 'ClusterRoleBinding',
+  netpol: 'NetworkPolicy', networkpolicy: 'NetworkPolicy', networkpolicies: 'NetworkPolicy',
+  crd: 'CustomResourceDefinition', crds: 'CustomResourceDefinition', customresourcedefinition: 'CustomResourceDefinition', customresourcedefinitions: 'CustomResourceDefinition',
+  quota: 'ResourceQuota', resourcequota: 'ResourceQuota', resourcequotas: 'ResourceQuota',
 };
-const PLURAL = { Pod: 'pods', Deployment: 'deployments.apps', ReplicaSet: 'replicasets.apps', StatefulSet: 'statefulsets.apps', Service: 'services', ConfigMap: 'configmaps', Secret: 'secrets', Namespace: 'namespaces', Node: 'nodes', Ingress: 'ingresses.networking.k8s.io', HorizontalPodAutoscaler: 'horizontalpodautoscalers.autoscaling', Endpoints: 'endpoints', PersistentVolumeClaim: 'persistentvolumeclaims', Job: 'jobs.batch', Event: 'events' };
-const SINGULAR = { Pod: 'pod', Deployment: 'deployment.apps', ReplicaSet: 'replicaset.apps', StatefulSet: 'statefulset.apps', Service: 'service', ConfigMap: 'configmap', Secret: 'secret', Namespace: 'namespace', Node: 'node', Ingress: 'ingress.networking.k8s.io', HorizontalPodAutoscaler: 'horizontalpodautoscaler.autoscaling', Endpoints: 'endpoints', PersistentVolumeClaim: 'persistentvolumeclaim', Job: 'job.batch' };
+const PLURAL = { ServiceAccount: 'serviceaccounts', Role: 'roles.rbac.authorization.k8s.io', ClusterRole: 'clusterroles.rbac.authorization.k8s.io', RoleBinding: 'rolebindings.rbac.authorization.k8s.io', ClusterRoleBinding: 'clusterrolebindings.rbac.authorization.k8s.io', NetworkPolicy: 'networkpolicies.networking.k8s.io', CustomResourceDefinition: 'customresourcedefinitions.apiextensions.k8s.io', ResourceQuota: 'resourcequotas', CronJob: 'cronjobs.batch', Pod: 'pods', Deployment: 'deployments.apps', ReplicaSet: 'replicasets.apps', StatefulSet: 'statefulsets.apps', Service: 'services', ConfigMap: 'configmaps', Secret: 'secrets', Namespace: 'namespaces', Node: 'nodes', Ingress: 'ingresses.networking.k8s.io', HorizontalPodAutoscaler: 'horizontalpodautoscalers.autoscaling', Endpoints: 'endpoints', PersistentVolumeClaim: 'persistentvolumeclaims', Job: 'jobs.batch', Event: 'events' };
+const SINGULAR = { ServiceAccount: 'serviceaccount', Role: 'role.rbac.authorization.k8s.io', ClusterRole: 'clusterrole.rbac.authorization.k8s.io', RoleBinding: 'rolebinding.rbac.authorization.k8s.io', ClusterRoleBinding: 'clusterrolebinding.rbac.authorization.k8s.io', NetworkPolicy: 'networkpolicy.networking.k8s.io', CustomResourceDefinition: 'customresourcedefinition.apiextensions.k8s.io', ResourceQuota: 'resourcequota', CronJob: 'cronjob.batch', Pod: 'pod', Deployment: 'deployment.apps', ReplicaSet: 'replicaset.apps', StatefulSet: 'statefulset.apps', Service: 'service', ConfigMap: 'configmap', Secret: 'secret', Namespace: 'namespace', Node: 'node', Ingress: 'ingress.networking.k8s.io', HorizontalPodAutoscaler: 'horizontalpodautoscaler.autoscaling', Endpoints: 'endpoints', PersistentVolumeClaim: 'persistentvolumeclaim', Job: 'job.batch' };
+
+// kinds a CRD added (Application, ClusterPolicy, ExternalSecret…) resolve per cluster
+export function kindOf(cl, t) {
+  const k = String(t || '').toLowerCase();
+  if (KINDS[k]) return KINDS[k];
+  for (const [kind, c] of cl?.crds || []) if ([c.plural, c.singular, kind.toLowerCase(), ...c.shortNames, `${c.plural}.${c.group}`, `${c.singular}.${c.group}`].includes(k)) return kind;
+  return null;
+}
+export const pluralOf = (cl, kind) => !kind ? undefined : PLURAL[kind] || (cl?.crds.get(kind) ? `${cl.crds.get(kind).plural}.${cl.crds.get(kind).group}` : kind.toLowerCase() + 's');
+export const singularOf = (cl, kind) => !kind ? undefined : SINGULAR[kind] || (cl?.crds.get(kind) ? `${cl.crds.get(kind).singular}.${cl.crds.get(kind).group}` : kind.toLowerCase());
+// other modules teach `kubectl get` and `describe` their kinds: PRINTERS[kind] = (cl, items) => [head, rows]
+export const PRINTERS = {};
+export const DESCRIBERS = {};
 
 // ---------------------------------------------------------------- output helpers
 export function age(uni, t) {
@@ -44,7 +68,7 @@ export function age(uni, t) {
   if (s < 8 * 86400) return `${d}d${hh % 24 ? (hh % 24) + 'h' : ''}`;
   return `${d}d`;
 }
-function table(head, rows) {
+export function table(head, rows) {
   const w = head.map((hd, k) => Math.max(hd.length, ...rows.map(r => String(r[k] ?? '').length)));
   return [head.map((hd, k) => hd.padEnd(w[k])).join('   ').trimEnd(), ...rows.map(r => r.map((v, k) => String(v ?? '').padEnd(w[k])).join('   ').trimEnd())];
 }
@@ -99,7 +123,7 @@ function jsonpath(obj, expr) {
 // what the API returns (status included, runtime fields stripped)
 function view(cl, o) {
   const x = clone(o);
-  if (x.status) for (const k of ['progressStart', 'deadlineReported', 'warned', 'lastScale', 'lowSince']) delete x.status[k];
+  if (x.status) for (const k of Object.keys(x.status)) if (['progressStart', 'deadlineReported', 'warned', 'lastScale', 'lowSince'].includes(k) || k.startsWith('__')) delete x.status[k];
   if (x.metadata?.creationTimestamp !== undefined) x.metadata.creationTimestamp = iso(x.metadata.creationTimestamp);
   if (x.metadata?.deletionTimestamp !== undefined) x.metadata.deletionTimestamp = iso(x.metadata.deletionTimestamp);
   x.metadata.resourceVersion = String(1000 + (x.metadata.generation || 1) * 7 + (o.metadata.name.length * 13));
@@ -149,7 +173,14 @@ function rows(cl, kind, items, { wide = false, showLabels = false, allNs = false
     case 'Endpoints': head = ['NAME', 'ENDPOINTS', 'AGE']; data = items.map(o => { const eps = (o.subsets || []).flatMap(s => s.addresses.flatMap(a => s.ports.map(p => `${a.ip}:${p.port}`))); return [o.metadata.name, eps.length ? eps.slice(0, 3).join(',') + (eps.length > 3 ? ` + ${eps.length - 3} more...` : '') : '<none>', age(uni, o.metadata.creationTimestamp)]; }); break;
     case 'PersistentVolumeClaim': head = ['NAME', 'STATUS', 'VOLUME', 'CAPACITY', 'ACCESS MODES', 'STORAGECLASS', 'VOLUMEATTRIBUTESCLASS', 'AGE']; data = items.map(o => [o.metadata.name, o.status.phase, o.spec.volumeName, o.status.capacity?.storage, 'RWO', o.spec.storageClassName, '<unset>', age(uni, o.metadata.creationTimestamp)]); break;
     case 'Job': head = ['NAME', 'STATUS', 'COMPLETIONS', 'DURATION', 'AGE']; data = items.map(o => [o.metadata.name, o.status.completionTime ? 'Complete' : o.status.failed > o.spec.backoffLimit ? 'Failed' : 'Running', `${o.status.succeeded || 0}/${o.spec.completions}`, age(uni, o.status.startTime ?? o.metadata.creationTimestamp).replace(/^(\d+s)$/, '$1'), age(uni, o.metadata.creationTimestamp)]); break;
-    default: head = ['NAME', 'AGE']; data = items.map(o => [o.metadata.name, age(uni, o.metadata.creationTimestamp)]);
+    case 'ServiceAccount': head = ['NAME', 'SECRETS', 'AGE']; data = items.map(o => [o.metadata.name, 0, age(uni, o.metadata.creationTimestamp)]); break;
+    case 'Role': case 'ClusterRole': head = ['NAME', 'CREATED AT']; data = items.map(o => [o.metadata.name, iso(o.metadata.creationTimestamp)]); break;
+    case 'RoleBinding': case 'ClusterRoleBinding': head = ['NAME', 'ROLE', 'AGE', ...(wide ? ['USERS', 'GROUPS', 'SERVICEACCOUNTS'] : [])]; data = items.map(o => [o.metadata.name, `${o.roleRef.kind}/${o.roleRef.name}`, age(uni, o.metadata.creationTimestamp), ...(wide ? ['User', 'Group'].map(k => (o.subjects || []).filter(x => x.kind === k).map(x => x.name).join(', ')).concat([(o.subjects || []).filter(x => x.kind === 'ServiceAccount').map(x => `${x.namespace || o.metadata.namespace}/${x.name}`).join(', ')]) : [])]); break;
+    case 'NetworkPolicy': head = ['NAME', 'POD-SELECTOR', 'AGE']; data = items.map(o => [o.metadata.name, Object.entries(o.spec.podSelector?.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',') || '<none>', age(uni, o.metadata.creationTimestamp)]); break;
+    case 'CustomResourceDefinition': head = ['NAME', 'CREATED AT']; data = items.map(o => [o.metadata.name, iso(o.metadata.creationTimestamp)]); break;
+    default:
+      if (PRINTERS[kind]) [head, data] = PRINTERS[kind](cl, items, { wide });
+      else { head = ['NAME', 'AGE']; data = items.map(o => [o.metadata.name, age(uni, o.metadata.creationTimestamp)]); }
   }
   if (allNs && !CLUSTER_SCOPED.has(kind)) { head = ['NAMESPACE', ...head]; data = data.map((r, k) => [items[k].metadata.namespace, ...r]); }
   if (showLabels) { head = [...head, 'LABELS']; data = data.map((r, k) => [...r, Object.entries(items[k].metadata.labels || {}).map(([a, b]) => `${a}=${b}`).join(',') || '<none>']); }
@@ -201,7 +232,7 @@ function describe(cl, o) {
   switch (o.kind) {
     case 'Pod': {
       const rt = cl.rt.get(o.metadata.uid);
-      L.push('Priority:         0', `Service Account:  default`);
+      L.push('Priority:         0', `Service Account:  ${o.spec.serviceAccountName || 'default'}`);
       kv('Node', rt?.node ? `${rt.node.name}/${rt.node.host.ip}` : '<none>');
       kv('Start Time', rt?.node ? new Date(o.metadata.creationTimestamp * 1000).toUTCString() : '<none>');
       labels('Labels', o.metadata.labels);
@@ -302,7 +333,36 @@ function describe(cl, o) {
       events();
       break;
     }
-    default: labels('Labels', o.metadata.labels); L.push(...toYaml({ spec: o.spec }).split('\n')); events();
+    case 'Role': case 'ClusterRole': {
+      labels('Labels', o.metadata.labels);
+      kv('Annotations', '<none>');
+      L.push('PolicyRule:', ...table(['  Resources', 'Non-Resource URLs', 'Resource Names', 'Verbs'], [['  ---------', '-----------------', '--------------', '-----'], ...(o.rules || []).flatMap(r => (r.resources || []).map(res => [`  ${res}${(r.apiGroups || []).filter(Boolean).length && res !== '*' ? '.' + r.apiGroups.filter(Boolean).join(',') : ''}`, '[]', `[${(r.resourceNames || []).join(' ')}]`, `[${(r.verbs || []).join(' ')}]`]))]).slice(0));
+      break;
+    }
+    case 'RoleBinding': case 'ClusterRoleBinding': {
+      labels('Labels', o.metadata.labels);
+      kv('Annotations', '<none>');
+      L.push('Role:', `  Kind:  ${o.roleRef.kind}`, `  Name:  ${o.roleRef.name}`, 'Subjects:', ...table(['  Kind', 'Name', 'Namespace'], [['  ----', '----', '---------'], ...(o.subjects || []).map(x => [`  ${x.kind}`, x.name, x.namespace || ''])]));
+      break;
+    }
+    case 'NetworkPolicy': {
+      kv('Created on', new Date(o.metadata.creationTimestamp * 1000).toUTCString());
+      labels('Labels', o.metadata.labels);
+      kv('Annotations', '<none>');
+      L.push('Spec:', `  PodSelector:     ${Object.entries(o.spec.podSelector?.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',') || '<none> (Allowing the specific traffic to all pods in this namespace)'}`);
+      const peer = pe => pe.ipBlock ? [`      IPBlock:`, `        CIDR: ${pe.ipBlock.cidr}`, `        Except: ${(pe.ipBlock.except || []).join(', ')}`] : [...(pe.namespaceSelector ? [`      NamespaceSelector: ${Object.entries(pe.namespaceSelector.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',') || '<none>'}`] : []), ...(pe.podSelector ? [`      PodSelector: ${Object.entries(pe.podSelector.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',') || '<none>'}`] : [])];
+      const ports = r => (r.ports || []).length ? r.ports.map(p => `    To Port: ${p.port ?? '<any> (traffic allowed to all ports)'}/${p.protocol || 'TCP'}`) : ['    To Port: <any> (traffic allowed to all ports)'];
+      const types = o.spec.policyTypes || (o.spec.egress ? ['Ingress', 'Egress'] : ['Ingress']);
+      if (types.includes('Ingress')) { L.push('  Allowing ingress traffic:'); if (!(o.spec.ingress || []).length) L.push('    <none> (Selected pods are isolated for ingress connectivity)'); for (const r of o.spec.ingress || []) { L.push(...ports(r), '    From:'); if (!(r.from || []).length) L.push('      <any> (traffic not restricted by source)'); for (const pe of r.from || []) L.push(...peer(pe)); } }
+      else L.push('  Not affecting ingress traffic');
+      if (types.includes('Egress')) { L.push('  Allowing egress traffic:'); if (!(o.spec.egress || []).length) L.push('    <none> (Selected pods are isolated for egress connectivity)'); for (const r of o.spec.egress || []) { L.push(...ports(r).map(x => x.replace('To Port', 'To Port')), '    To:'); if (!(r.to || []).length) L.push('      <any> (traffic not restricted by destination)'); for (const pe of r.to || []) L.push(...peer(pe)); } }
+      else L.push('  Not affecting egress traffic');
+      L.push(`  Policy Types: ${types.join(', ')}`);
+      break;
+    }
+    default:
+      if (DESCRIBERS[o.kind]) { L.push(...DESCRIBERS[o.kind](cl, o, { kv, labels, events })); break; }
+      labels('Labels', o.metadata.labels); L.push(...toYaml({ spec: o.spec }).split('\n')); events();
   }
   return L;
 }
@@ -316,7 +376,7 @@ function kubeconfig(c) {
 }
 function saveKubeconfig(c, path, cfg) { c.host.writeFile(path, toYaml(cfg) + '\n', c.user); }
 
-function clusterFor(c, flags) {
+export function clusterFor(c, flags) {
   const { path, cfg, error } = kubeconfig(c);
   if (error) return { error };
   if (!cfg) return { error: 'E1023 09:12:01.482100    4021 memcache.go:265] couldn\'t get current server API group list: Get "http://localhost:8080/api?timeout=32s": dial tcp 127.0.0.1:8080: connect: connection refused\nThe connection to the server localhost:8080 was refused - did you specify the right host or port?' };
@@ -331,16 +391,24 @@ function clusterFor(c, flags) {
   const cl = [...c.uni.clusters.values()].find(x => x.cp.ip === ip || x.cp.name === m?.[1]);
   const conn = m ? connect(c.uni, c.host, m[1], Number(m[2] || 443)) : { error: 'ENOTFOUND' };
   if (!cl || conn.error) return { error: `Unable to connect to the server: dial tcp ${ip || m?.[1]}:${m?.[2] || 443}: ${conn.error === 'ETIMEDOUT' ? 'i/o timeout' : conn.error === 'ENOTFOUND' ? `lookup ${m?.[1]}: no such host` : 'connect: connection refused'}` };
-  const userEntry = (cfg.users || []).find(x => x.name === ctx.context?.user);
-  const token = userEntry?.user?.token || '';
-  const role = cl.tokens?.[token] || (cl.tokens ? null : 'admin');
-  if (!role) return { error: 'error: You must be logged in to the server (Unauthorized)' };
-  return { cl, ns: flags.namespace || ctx.context?.namespace || 'default', role, user: ctx.context?.user, path, cfg };
+  const userName = flags.raw?.user ?? ctx.context?.user;
+  const userEntry = (cfg.users || []).find(x => x.name === userName);
+  const token = flags.raw?.token ?? userEntry?.user?.token ?? '';
+  let ident = identityFor(cl, token);
+  if (!ident) return { error: 'error: You must be logged in to the server (Unauthorized)' };
+  const as = flags.raw?.as;
+  if (as) {
+    if (!ident.groups.includes('system:masters')) return { error: `Error from server (Forbidden): users "${as}" is forbidden: User "${ident.user || userName}" cannot impersonate resource "users" in API group "" at the cluster scope` };
+    const m = as.match(/^system:serviceaccount:([^:]+):(.+)$/);
+    ident = m ? saIdentity(m[1], m[2]) : { user: as, groups: [...(flags.all?.('--as-group') || []), 'system:authenticated'] };
+  }
+  const role = ident.legacyView ? 'view' : ident.groups.includes('system:masters') ? 'admin' : 'rbac';
+  return { cl, ns: flags.namespace || ctx.context?.namespace || 'default', role, ident, user: ctx.context?.user, path, cfg };
 }
 
 // ---------------------------------------------------------------- argument parsing
-const VALUE_FLAGS = new Set(['-n', '--namespace', '-o', '--output', '-l', '--selector', '-f', '--filename', '--context', '-c', '--container', '--tail', '--replicas', '--image', '--port', '--target-port', '--type', '--name', '--to-revision', '--from-literal', '--from-file', '--docker-server', '--docker-username', '--docker-password', '--docker-email', '--min', '--max', '--cpu-percent', '--timeout', '--for', '--restart', '--grace-period', '--field-selector', '--sort-by', '--since', '-p', '--patch', '--rule', '--class', '--env', '-e', '--overrides', '--revision', '--protocol', '--tcp', '--from-env-file', '--dry-run', '--cluster', '--user', '--server', '--token', '--as', '--subresource']);
-const BOOL_FLAGS = new Set(['-A', '--all-namespaces', '-w', '--watch', '--show-labels', '-i', '-t', '-it', '-ti', '--stdin', '--tty', '--rm', '--all', '--force', '--previous', '--follow', '-F', '--now', '--wait', '--overwrite', '--current', '--record', '--no-headers', '-q', '--quiet', '--ignore-not-found', '--prefix', '--raw', '--recursive', '-R', '--minify', '--flatten']);
+const VALUE_FLAGS = new Set(['-n', '--namespace', '-o', '--output', '-l', '--selector', '-f', '--filename', '--context', '-c', '--container', '--tail', '--replicas', '--image', '--port', '--target-port', '--type', '--name', '--to-revision', '--from-literal', '--from-file', '--docker-server', '--docker-username', '--docker-password', '--docker-email', '--min', '--max', '--cpu-percent', '--timeout', '--for', '--restart', '--grace-period', '--field-selector', '--sort-by', '--since', '-p', '--patch', '--rule', '--class', '--env', '-e', '--overrides', '--revision', '--protocol', '--tcp', '--from-env-file', '--dry-run', '--cluster', '--user', '--server', '--token', '--as', '--subresource', '--as-group', '--verb', '--resource', '--resource-name', '--role', '--clusterrole', '--serviceaccount', '--group', '--duration', '-k', '--kustomize', '--certificate-authority', '--insecure-skip-tls-verify']);
+const BOOL_FLAGS = new Set(['-A', '--all-namespaces', '-w', '--watch', '--show-labels', '-i', '-t', '-it', '-ti', '--stdin', '--tty', '--rm', '--all', '--force', '--previous', '--follow', '-F', '--now', '--wait', '--overwrite', '--current', '--record', '--no-headers', '-q', '--quiet', '--ignore-not-found', '--prefix', '--raw', '--recursive', '-R', '--minify', '--flatten', '--list', '--embed-certs']);
 
 function parseArgs(args) {
   const f = { _: [], multi: {} };
@@ -367,17 +435,27 @@ function parseArgs(args) {
 // "pod/web-1", "deploy web", "pods" → [{kind, name}]
 function targets(pos, cl, ns) {
   if (!pos.length) return { error: 'error: you must specify the type of resource to get. Use "kubectl api-resources" for a complete list of supported resources.' };
-  if (pos[0].includes('/')) return { list: pos.map(x => { const [t, n] = x.split('/'); return { kind: KINDS[t.toLowerCase()], type: t, name: n }; }) };
+  if (pos[0].includes('/')) return { list: pos.map(x => { const [t, n] = x.split('/'); return { kind: kindOf(cl, t), type: t, name: n }; }) };
   const types = pos[0].split(',');
   const out = [];
   for (const t of types) {
     if (t === 'all') { for (const k of ['Pod', 'Service', 'Deployment', 'ReplicaSet', 'StatefulSet', 'HorizontalPodAutoscaler', 'Job']) out.push({ kind: k, all: true, type: 'all' }); continue; }
-    const kind = KINDS[t.toLowerCase()];
+    const kind = kindOf(cl, t);
     if (!kind) return { error: `error: the server doesn't have a resource type "${t}"` };
     if (pos.length > 1) for (const n of pos.slice(1)) out.push({ kind, name: n, type: t }); else out.push({ kind, type: t });
   }
   for (const x of out) if (!x.kind) return { error: `error: the server doesn't have a resource type "${x.type}"` };
   return { list: out };
+}
+
+// -k DIR: build the kustomization; otherwise read -f files
+function readInput(c, a) {
+  const k = a.val('-k') ?? a.val('--kustomize');
+  if (k) {
+    const r = kustomizeBuild(hostFiles(c.host), c.resolve(k));
+    return r.error ? { error: r.error } : { docs: r.docs.map(d => Object.assign(d, { __file: k })) };
+  }
+  return readManifests(c, a.files);
 }
 
 function readManifests(c, files) {
@@ -415,13 +493,14 @@ function waitFor(c, cl, pred, timeout = 120, step = 2) {
   return pred();
 }
 
-const resName = o => `${SINGULAR[o.kind] || o.kind.toLowerCase()}/${o.metadata.name}`;
+let CUR = null; // the cluster the running kubectl command talks to
+const resName = o => `${singularOf(CUR, o.kind)}/${o.metadata.name}`;
 
 function findPodsFor(cl, ns, ref) {
   // ref: pod name, or deploy/x, svc/x
   if (ref.includes('/')) {
     const [t, n] = ref.split('/');
-    const kind = KINDS[t.toLowerCase()];
+    const kind = kindOf(cl, t);
     if (kind === 'Pod') return [cl.get('Pod', ns, n)].filter(Boolean);
     const o = cl.get(kind, ns, n);
     if (!o) return null;
@@ -429,6 +508,49 @@ function findPodsFor(cl, ns, ref) {
     return cl.list('Pod', ns, sel).filter(p => !p.metadata.deletionTimestamp).sort((a, b) => (cl.podReady(b) ? 1 : 0) - (cl.podReady(a) ? 1 : 0));
   }
   return [cl.get('Pod', ns, ref)].filter(Boolean);
+}
+
+// the API requests a kubectl command makes, for RBAC: [{ verb, resource, group, ns, name }]
+function requestsFor(cl, verb, pos, a, ns) {
+  const R = (kind, v, name, sub) => { const r = cl.resourceOf(kind); return { verb: v, resource: r.resource + (sub ? '/' + sub : ''), group: r.group, ns: CLUSTER_SCOPED.has(kind) ? null : ns, name }; };
+  const tgs = p => { const tg = targets(p, cl, ns); return tg.error ? [] : tg.list.filter(t => t.kind); };
+  switch (verb) {
+    case 'get': if (['events', 'ev', 'event'].includes(pos[0])) return [R('Event', 'list')]; return tgs(pos).map(t => R(t.kind, t.name ? 'get' : 'list', t.name)).filter((x, i, arr) => arr.findIndex(y => y.resource === x.resource && y.verb === x.verb) === i);
+    case 'describe': return tgs(pos).map(t => R(t.kind, t.name ? 'get' : 'list', t.name));
+    case 'delete': return a.files.length || a.val('-k') ? [] : tgs(pos).map(t => R(t.kind, 'delete', t.name));
+    case 'logs': return [R('Pod', 'get', pos[0] && !pos[0].includes('/') ? pos[0] : undefined, 'log')];
+    case 'exec': return [R('Pod', 'create', pos[0] && !pos[0].includes('/') ? pos[0] : undefined, 'exec')];
+    case 'port-forward': return [R('Pod', 'create', undefined, 'portforward')];
+    case 'scale': return tgs(pos).map(t => R(t.kind, 'patch', t.name, 'scale'));
+    case 'set': return tgs(pos[1]?.includes('/') ? pos.slice(1, 2) : pos.slice(1, 3)).map(t => R(t.kind, 'patch', t.name));
+    case 'label': case 'annotate': case 'patch': return tgs(pos[0]?.includes('/') ? pos.slice(0, 1) : pos.slice(0, 2)).map(t => R(t.kind, 'patch', t.name));
+    case 'edit': return tgs(pos[0]?.includes('/') ? pos.slice(0, 1) : pos.slice(0, 2)).flatMap(t => [R(t.kind, 'get', t.name), R(t.kind, 'update', t.name)]);
+    case 'rollout': return tgs(pos.slice(1)).map(t => R(t.kind, ['status', 'history'].includes(pos[0]) ? 'get' : 'patch', t.name));
+    case 'expose': return [R('Service', 'create')];
+    case 'run': return [R('Pod', 'create')];
+    case 'autoscale': return [R('HorizontalPodAutoscaler', 'create')];
+    case 'top': return [R('Pod', 'list')];
+    case 'cordon': case 'uncordon': case 'drain': return [R('Node', 'patch', pos[0])];
+    case 'create': {
+      if (a.files.length || a.val('-k')) return [];
+      const kind = { ns: 'Namespace', namespace: 'Namespace', deploy: 'Deployment', deployment: 'Deployment', cm: 'ConfigMap', configmap: 'ConfigMap', secret: 'Secret', job: 'Job', svc: 'Service', service: 'Service', ingress: 'Ingress', sa: 'ServiceAccount', serviceaccount: 'ServiceAccount', role: 'Role', clusterrole: 'ClusterRole', rolebinding: 'RoleBinding', clusterrolebinding: 'ClusterRoleBinding' }[pos[0]];
+      if (pos[0] === 'token') return [R('ServiceAccount', 'create', pos[1], 'token')];
+      return kind ? [R(kind, 'create')] : [];
+    }
+  }
+  return [];
+}
+
+// "deployments.apps", "deploy", "pods/log", "*" -> { resource, group }
+function parseResource(cl, text) {
+  if (text === '*') return { resource: '*', group: '*' };
+  const [base, sub] = String(text).split('/');
+  const dot = base.indexOf('.');
+  if (dot > 0) { const k = kindOf(cl, base); if (k) { const r = cl.resourceOf(k); return { resource: r.resource + (sub ? '/' + sub : ''), group: r.group }; } return { resource: base.slice(0, dot) + (sub ? '/' + sub : ''), group: base.slice(dot + 1) }; }
+  const k = kindOf(cl, base);
+  if (!k) return null;
+  const r = cl.resourceOf(k);
+  return { resource: r.resource + (sub ? '/' + sub : ''), group: r.group };
 }
 
 // ---------------------------------------------------------------- the command
@@ -442,15 +564,26 @@ def('kubectl', c => {
   }
   if (verb === 'version') { if (a.has('--client') || a.raw['--client'] !== undefined) { out('Client Version: v1.31.2', 'Kustomize Version: v5.4.2'); return 0; } }
   if (verb === 'config') return configCmd(c, a, pos);
+  if (verb === 'kustomize') {
+    const r = kustomizeBuild(hostFiles(c.host), c.resolve(pos[0] || '.'));
+    if (r.error) return c.fail(r.error, 1);
+    out(...r.docs.map(d => { const { __file, ...rest } = d; return toYaml(rest); }).join('\n---\n').split('\n'));
+    c.uni.emit({ type: 'kubectl', host: c.host.name, verb, args: c.args.join(' '), ok: true });
+    return 0;
+  }
   const conn = clusterFor(c, a);
   if (conn.error) return c.fail(conn.error, 1);
   const { cl } = conn;
+  CUR = cl;
   const ns = a.namespace || conn.ns;
   const uni = c.uni;
+  if (conn.role === 'rbac') {
+    for (const req of requestsFor(cl, verb, pos, a, ns)) if (!authorize(cl, conn.ident, req)) { uni.emit({ type: 'kubectl', host: c.host.name, cluster: cl.name, verb, ns, args: c.args.join(' '), forbidden: true, user: conn.ident.user }); return c.fail(`Error from server (Forbidden): ${forbidden(conn.ident, req)}`, 1); }
+  }
   const write = ['apply', 'create', 'delete', 'edit', 'scale', 'set', 'rollout', 'expose', 'run', 'label', 'annotate', 'autoscale', 'exec', 'port-forward', 'patch', 'cordon', 'drain', 'uncordon'];
   if (conn.role === 'view' && write.includes(verb) && !(verb === 'rollout' && ['status', 'history'].includes(pos[0]))) {
     const t = pos[0] || 'resource';
-    return c.fail(`Error from server (Forbidden): ${verb === 'exec' ? 'pods "' + t + '" is forbidden' : `${PLURAL[KINDS[t.split('/')[0]]] || t} is forbidden`}: User "${conn.user}" cannot ${verb === 'exec' ? 'create resource "pods/exec"' : `${verb === 'delete' ? 'delete' : verb === 'apply' || verb === 'create' ? 'create' : 'patch'} resource "${PLURAL[KINDS[(t.split('/')[0] || '').toLowerCase()]]?.split('.')[0] || 'pods'}"`} in API group "${['Deployment', 'ReplicaSet', 'StatefulSet'].includes(KINDS[(t.split('/')[0] || '').toLowerCase()]) ? 'apps' : ''}" in the namespace "${ns}"`, 1);
+    return c.fail(`Error from server (Forbidden): ${verb === 'exec' ? 'pods "' + t + '" is forbidden' : `${pluralOf(cl, kindOf(cl, t.split('/')[0])) || t} is forbidden`}: User "${conn.user}" cannot ${verb === 'exec' ? 'create resource "pods/exec"' : `${verb === 'delete' ? 'delete' : verb === 'apply' || verb === 'create' ? 'create' : 'patch'} resource "${pluralOf(cl, kindOf(cl, t.split('/')[0] || ''))?.split('.')[0] || 'pods'}"`} in API group "${['Deployment', 'ReplicaSet', 'StatefulSet'].includes(kindOf(cl, t.split('/')[0] || '')) ? 'apps' : ''}" in the namespace "${ns}"`, 1);
   }
   const ensureNs = () => cl.get('Namespace', null, ns) ? null : c.fail(`Error from server (NotFound): namespaces "${ns}" not found`, 1);
   const emit = (extra) => uni.emit({ type: 'kubectl', host: c.host.name, cluster: cl.name, verb, ns, args: c.args.join(' '), ...extra });
@@ -464,7 +597,7 @@ def('kubectl', c => {
       if (pos[0] === 'events' || pos[0] === 'ev' || pos[0] === 'event') {
         const ev = cl.events.filter(e => a.allNs || e.ns === ns).slice(-40);
         if (!ev.length) { c.eprint(`No events found in ${ns} namespace.`); return 0; }
-        out(...table([...(a.allNs ? ['NAMESPACE'] : []), 'LAST SEEN', 'TYPE', 'REASON', 'OBJECT', 'MESSAGE'], ev.map(e => [...(a.allNs ? [e.ns] : []), age(uni, e.last), e.type, e.reason, `${(SINGULAR[e.kind] || e.kind.toLowerCase()).split('.')[0]}/${e.name}`, e.message])));
+        out(...table([...(a.allNs ? ['NAMESPACE'] : []), 'LAST SEEN', 'TYPE', 'REASON', 'OBJECT', 'MESSAGE'], ev.map(e => [...(a.allNs ? [e.ns] : []), age(uni, e.last), e.type, e.reason, `${singularOf(cl, e.kind).split('.')[0]}/${e.name}`, e.message])));
         return 0;
       }
       const tg = targets(pos, cl, ns);
@@ -475,7 +608,7 @@ def('kubectl', c => {
       for (const t of tg.list) {
         if (t.name) {
           const o = cl.get(t.kind, ns, t.name);
-          if (!o) { if (!a.has('--ignore-not-found')) c.eprint(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`); continue; }
+          if (!o) { if (!a.has('--ignore-not-found')) c.eprint(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`); continue; }
           found.push(o);
         } else {
           let items = cl.list(t.kind, a.allNs ? null : ns, sel);
@@ -508,7 +641,7 @@ def('kubectl', c => {
         for (const [kind, items] of byKind) {
           if (!first) outs.push('');
           first = false;
-          let lines = rows(cl, kind, items, { wide: fmt === 'wide', showLabels: a.has('--show-labels'), allNs: a.allNs, prefix: multi ? `${SINGULAR[kind] || kind.toLowerCase()}/` : '' });
+          let lines = rows(cl, kind, items, { wide: fmt === 'wide', showLabels: a.has('--show-labels'), allNs: a.allNs, prefix: multi ? `${singularOf(cl, kind)}/` : '' });
           if (a.has('--no-headers')) lines = lines.slice(1);
           outs.push(...lines);
         }
@@ -526,7 +659,7 @@ def('kubectl', c => {
       const blocks = [];
       for (const t of tg.list) {
         const items = t.name ? [cl.get(t.kind, ns, t.name) || cl.list(t.kind, ns).find(o => o.metadata.name.startsWith(t.name))].filter(Boolean) : cl.list(t.kind, ns, a.selector ? parseSelector(a.selector) : null);
-        if (!items.length) { c.eprint(t.name ? `Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found` : `No resources found in ${ns} namespace.`); code = 1; continue; }
+        if (!items.length) { c.eprint(t.name ? `Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found` : `No resources found in ${ns} namespace.`); code = 1; continue; }
         for (const o of items) { if (blocks.length) blocks.push('', ''); blocks.push(...describe(cl, o)); }
       }
       out(...blocks);
@@ -534,36 +667,44 @@ def('kubectl', c => {
       return code;
     }
     case 'apply': case 'create': {
-      if (verb === 'create' && !a.files.length) return createCmd(c, a, pos, cl, ns, emit);
-      if (!a.files.length) { if (a.has('-k') || a.val('-k')) return c.fail('error: the simulator does not support kustomize; apply the files with -f', 1); return c.fail('error: must specify one of -f and -k', 1); }
-      const r = readManifests(c, a.files);
+      const kdir = a.val('-k') ?? a.val('--kustomize');
+      if (verb === 'create' && !a.files.length && !kdir) return createCmd(c, a, pos, cl, ns, emit, conn);
+      if (!a.files.length && !kdir) return c.fail('error: must specify one of -f and -k', 1);
+      const r = readInput(c, a);
       if (r.error) return c.fail(r.error, 1);
       if (!r.docs.length) return c.fail('error: no objects passed to apply', 1);
       const dry = a.val('--dry-run');
       let code = 0;
       for (const d of r.docs) {
-        if (verb === 'create' && cl.get(d.kind, d.metadata?.namespace || ns, d.metadata?.name)) { c.eprint(`Error from server (AlreadyExists): error when creating "${d.__file}": ${PLURAL[d.kind]} "${d.metadata.name}" already exists`); code = 1; continue; }
+        if (verb === 'create' && cl.get(d.kind, d.metadata?.namespace || ns, d.metadata?.name)) { c.eprint(`Error from server (AlreadyExists): error when creating "${d.__file}": ${pluralOf(cl, d.kind)} "${d.metadata.name}" already exists`); code = 1; continue; }
         if (dry) { const v = cl.validate({ ...clone(d), metadata: { namespace: ns, ...d.metadata } }); if (v) { c.eprint(v); code = 1; } else out(`${resName(d)} ${cl.get(d.kind, d.metadata.namespace || ns, d.metadata.name) ? 'configured' : 'created'} (dry run)`); continue; }
-        const res = cl.apply(d, { ns });
+        if (conn.role === 'rbac') {
+          const rr = cl.resourceOf(d.kind);
+          const dns = CLUSTER_SCOPED.has(d.kind) ? null : (d.metadata?.namespace || ns);
+          const exists = !!cl.get(d.kind, dns, d.metadata?.name);
+          const req = { verb: exists ? 'patch' : 'create', resource: rr.resource, group: rr.group, ns: dns, name: d.metadata?.name };
+          if (!authorize(cl, conn.ident, { ...req, verb: 'get' }) || !authorize(cl, conn.ident, req)) { c.eprint(`Error from server (Forbidden): error when ${exists ? 'applying patch' : 'creating'} "${d.__file}": ${forbidden(conn.ident, authorize(cl, conn.ident, { ...req, verb: 'get' }) ? req : { ...req, verb: 'get' })}`); code = 1; uni.emit({ type: 'kubectl', host: c.host.name, cluster: cl.name, verb, ns, args: c.args.join(' '), forbidden: true, user: conn.ident.user }); continue; }
+        }
+        const res = cl.apply(d, { ns, user: conn.ident?.user });
         if (res.error) { c.eprint(res.error); code = 1; continue; }
         for (const w of res.warnings || []) c.eprint(w);
         out(`${resName(res.obj)} ${res.verb}`);
       }
       uni.advance(1);
-      emit({ kinds: r.docs.map(d => d.kind), names: r.docs.map(d => d.metadata?.name), files: a.files, ok: code === 0 });
+      emit({ kinds: r.docs.map(d => d.kind), names: r.docs.map(d => d.metadata?.name), files: kdir ? [kdir] : a.files, kustomize: kdir || null, ok: code === 0 });
       return code;
     }
     case 'delete': {
       let objs = [];
-      if (a.files.length) {
-        const r = readManifests(c, a.files);
+      if (a.files.length || a.val('-k')) {
+        const r = readInput(c, a);
         if (r.error) return c.fail(r.error, 1);
-        for (const d of r.docs) { const o = cl.get(d.kind, d.metadata?.namespace || ns, d.metadata?.name); if (o) objs.push(o); else c.eprint(`Error from server (NotFound): error when deleting "${d.__file}": ${PLURAL[d.kind]} "${d.metadata?.name}" not found`); }
+        for (const d of r.docs) { const o = cl.get(d.kind, d.metadata?.namespace || ns, d.metadata?.name); if (o) objs.push(o); else c.eprint(`Error from server (NotFound): error when deleting "${d.__file}": ${pluralOf(cl, d.kind)} "${d.metadata?.name}" not found`); }
       } else {
         const tg = targets(pos, cl, ns);
         if (tg.error) return c.fail(tg.error === 'error: you must specify the type of resource to get. Use "kubectl api-resources" for a complete list of supported resources.' ? 'error: You must provide one or more resources by argument or filename.' : tg.error, 1);
         for (const t of tg.list) {
-          if (t.name) { const o = cl.get(t.kind, ns, t.name); if (o) objs.push(o); else { c.eprint(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`); } }
+          if (t.name) { const o = cl.get(t.kind, ns, t.name); if (o) objs.push(o); else { c.eprint(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`); } }
           else if (a.has('--all') || a.selector) objs.push(...cl.list(t.kind, ns, a.selector ? parseSelector(a.selector) : null));
           else return c.fail('error: resource(s) were provided, but no name was specified', 1);
         }
@@ -582,7 +723,7 @@ def('kubectl', c => {
       if (a.selector) pods = cl.list('Pod', ns, parseSelector(a.selector));
       else if (!ref) return c.fail('error: expected \'logs [-f] [-p] (POD | TYPE/NAME) [-c CONTAINER]\'.\nPOD or TYPE/NAME is a required argument for the logs command', 1);
       else pods = findPodsFor(cl, ns, ref);
-      if (!pods || !pods.length) return c.fail(ref ? `Error from server (NotFound): ${ref.includes('/') ? PLURAL[KINDS[ref.split('/')[0]]] || 'pods' : 'pods'} "${ref.split('/').pop()}" not found` : 'No resources found', 1);
+      if (!pods || !pods.length) return c.fail(ref ? `Error from server (NotFound): ${ref.includes('/') ? pluralOf(cl, kindOf(cl, ref.split('/')[0])) || 'pods' : 'pods'} "${ref.split('/').pop()}" not found` : 'No resources found', 1);
       if (!a.selector) pods = pods.slice(0, 1);
       if (pods.length > 1 || (ref && ref.includes('/') && !ref.startsWith('pod'))) { const total = findPodsFor(cl, ns, ref || '')?.length; if (!a.selector && total > 1) c.eprint(`Found ${total} pods, using pod/${pods[0].metadata.name}`); }
       const tail = a.val('--tail') !== undefined ? Number(a.val('--tail')) : -1;
@@ -645,7 +786,7 @@ def('kubectl', c => {
       if (!ref || !spec) return c.fail('error: TYPE/NAME and list of ports are required for port-forward', 1);
       const [lp, rp] = spec.includes(':') ? spec.split(':').map(Number) : [Number(spec), Number(spec)];
       const pods = findPodsFor(cl, ns, ref);
-      if (!pods?.length) return c.fail(`Error from server (NotFound): ${ref.includes('/') ? PLURAL[KINDS[ref.split('/')[0]]] : 'pods'} "${ref.split('/').pop()}" not found`, 1);
+      if (!pods?.length) return c.fail(`Error from server (NotFound): ${ref.includes('/') ? pluralOf(cl, kindOf(cl, ref.split('/')[0])) : 'pods'} "${ref.split('/').pop()}" not found`, 1);
       const p = pods.find(x => cl.podReady(x)) || pods[0];
       if (!cl.podReady(p)) return c.fail(`error: unable to forward port because pod is not running. Current status=${p.status.phase}`, 1);
       let target = rp;
@@ -667,7 +808,7 @@ def('kubectl', c => {
       if (tg.error) return c.fail(tg.error, 1);
       for (const t of tg.list) {
         const o = cl.get(t.kind, ns, t.name);
-        if (!o) return c.fail(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`, 1);
+        if (!o) return c.fail(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`, 1);
         o.spec.replicas = Number(reps);
         out(`${resName(o)} scaled`);
         emit({ kind: o.kind, name: o.metadata.name, replicas: Number(reps) });
@@ -685,7 +826,7 @@ def('kubectl', c => {
       const t = tg.list[0];
       if (!t.name) return c.fail(`error: resource(s) were provided, but no name was specified`, 1);
       const o = cl.get(t.kind, ns, t.name);
-      if (!o) return c.fail(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`, 1);
+      if (!o) return c.fail(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`, 1);
       const tpl = o.kind === 'Pod' ? o.spec : o.spec.template.spec;
       const pairs = pos.slice(typed ? 2 : 3);
       if (pos[0] === 'image') {
@@ -714,7 +855,7 @@ def('kubectl', c => {
       if (tg.error) return c.fail(tg.error, 1);
       const t = tg.list[0];
       const o = cl.get(t.kind, ns, t.name);
-      if (!o) return c.fail(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`, 1);
+      if (!o) return c.fail(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`, 1);
       const sel = o.spec.selector?.matchLabels || o.metadata.labels;
       const port = Number(a.val('--port') || o.spec.template?.spec.containers[0].ports?.[0]?.containerPort || o.spec.containers?.[0]?.ports?.[0]?.containerPort);
       if (!port) return c.fail(`error: couldn't find port via --port flag or introspection\nSee 'kubectl expose -h' for help and examples`, 1);
@@ -764,7 +905,7 @@ def('kubectl', c => {
       if (tg.error) return c.fail(tg.error, 1);
       const t = tg.list[0];
       const o = cl.get(t.kind, ns, t.name);
-      if (!o) return c.fail(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`, 1);
+      if (!o) return c.fail(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`, 1);
       const v = view(cl, o);
       delete v.status; delete v.metadata.uid; delete v.metadata.resourceVersion; delete v.metadata.generation; delete v.metadata.creationTimestamp; delete v.metadata.ownerReferences;
       const before = toYaml(v) + '\n';
@@ -790,7 +931,7 @@ def('kubectl', c => {
       if (tg.error) return c.fail(tg.error, 1);
       const t = tg.list[0];
       const o = cl.get(t.kind, ns, t.name);
-      if (!o) return c.fail(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`, 1);
+      if (!o) return c.fail(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`, 1);
       const field = verb === 'label' ? 'labels' : 'annotations';
       o.metadata[field] = o.metadata[field] || {};
       for (const kv of pos.slice(pos[0].includes('/') ? 1 : 2)) {
@@ -819,7 +960,7 @@ def('kubectl', c => {
       if (tg.error) return c.fail(tg.error, 1);
       const t = tg.list[0];
       const o = cl.get(t.kind, ns, t.name);
-      if (!o) return c.fail(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`, 1);
+      if (!o) return c.fail(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`, 1);
       const hpa = { apiVersion: 'autoscaling/v2', kind: 'HorizontalPodAutoscaler', metadata: { name: o.metadata.name, namespace: ns }, spec: { scaleTargetRef: { apiVersion: 'apps/v1', kind: o.kind, name: o.metadata.name }, minReplicas: Number(a.val('--min') || 1), maxReplicas: Number(a.val('--max')), metrics: [{ type: 'Resource', resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: Number(a.val('--cpu-percent') || 80) } } }] } };
       if (!a.val('--max')) return c.fail('error: --max=MAXPODS is required and must be at least 1, max replicas must be >= min replicas', 1);
       const res = cl.apply(hpa, { ns });
@@ -846,7 +987,7 @@ def('kubectl', c => {
       if (tg.error) return c.fail(tg.error, 1);
       const t = tg.list[0];
       const o = cl.get(t.kind, ns, t.name);
-      if (!o) return c.fail(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`, 1);
+      if (!o) return c.fail(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`, 1);
       let patch;
       try { patch = JSON.parse(a.val('-p') || a.val('--patch') || '{}'); } catch { try { patch = parseYaml(a.val('-p') || a.val('--patch')); } catch (e) { return c.fail(`error: unable to parse "${a.val('-p')}": ${e.message}`, 1); } }
       const merge = (dst, src) => { for (const [k, v] of Object.entries(src)) { if (v === null) delete dst[k]; else if (v && typeof v === 'object' && !Array.isArray(v) && dst[k] && typeof dst[k] === 'object') merge(dst[k], v); else dst[k] = v; } };
@@ -874,28 +1015,92 @@ def('kubectl', c => {
       return 0;
     }
     case 'auth': {
-      if (pos[0] !== 'can-i') return c.fail('error: unknown command', 1);
+      if (pos[0] === 'whoami') {
+        const id = conn.ident;
+        out(...table(['ATTRIBUTE', 'VALUE'], [['Username', id.user || conn.user], ['Groups', `[${id.groups.join(' ')}]`]]));
+        return 0;
+      }
+      if (pos[0] !== 'can-i') return c.fail(`error: unknown command "${pos[0] || ''}" for "kubectl auth"`, 1);
+      const scopeNs = a.allNs ? null : ns;
+      if (a.has('--list')) {
+        if (conn.role === 'view') { out(...table(['Resources', 'Non-Resource URLs', 'Resource Names', 'Verbs'], [['*.*', '[]', '[]', '[get list watch]']])); return 0; }
+        const rules = conn.role === 'admin' ? [{ apiGroups: ['*'], resources: ['*'], verbs: ['*'] }] : rulesFor(cl, conn.ident, scopeNs);
+        const rowsL = [['selfsubjectreviews.authentication.k8s.io', '[]', '[]', '[create]'], ['selfsubjectaccessreviews.authorization.k8s.io', '[]', '[]', '[create]'], ...rules.flatMap(r => (r.resources || []).map(res => [res === '*' && (r.apiGroups || []).includes('*') ? '*.*' : `${res}${(r.apiGroups || []).filter(Boolean).length ? '.' + r.apiGroups.filter(Boolean).join(',') : ''}`, '[]', `[${(r.resourceNames || []).join(' ')}]`, `[${(r.verbs || []).join(' ')}]`]))];
+        out(...table(['Resources', 'Non-Resource URLs', 'Resource Names', 'Verbs'], rowsL));
+        uni.emit({ type: 'kubectl', host: c.host.name, cluster: cl.name, verb: 'auth', sub: 'can-i', list: true, ns: scopeNs, user: conn.ident.user, args: c.args.join(' ') });
+        return 0;
+      }
       const v = pos[1];
-      const allowed = conn.role === 'admin' || ['get', 'list', 'watch'].includes(v);
+      const [resText, name] = (pos[2] || '').includes('/') && !/\/(log|exec|scale|status|portforward|token)$/.test(pos[2]) ? pos[2].split('/') : [pos[2] || '', pos[3]];
+      if (!v || !resText) return c.fail('error: you must specify two arguments: verb resource or verb resource/resourceName.', 1);
+      const pr = parseResource(cl, resText);
+      if (!pr) { c.eprint(`Warning: the server doesn't have a resource type '${resText}'`); out('no'); return 1; }
+      let allowed;
+      if (conn.role === 'admin') allowed = true;
+      else if (conn.role === 'view') allowed = ['get', 'list', 'watch'].includes(v);
+      else allowed = authorize(cl, conn.ident, { verb: v, resource: pr.resource, group: pr.group, ns: scopeNs, name });
       out(allowed ? 'yes' : 'no');
+      uni.emit({ type: 'kubectl', host: c.host.name, cluster: cl.name, verb: 'auth', sub: 'can-i', ns: scopeNs, user: conn.ident.user, check: { verb: v, resource: pr.resource, group: pr.group }, allowed, args: c.args.join(' ') });
       return allowed ? 0 : 1;
+    }
+    case 'diff': {
+      const r = readInput(c, a);
+      if (r.error) return c.fail(r.error, 1);
+      const lines = [];
+      for (const d of r.docs) {
+        const dns = CLUSTER_SCOPED.has(d.kind) ? null : (d.metadata?.namespace || ns);
+        const live = cl.get(d.kind, dns, d.metadata?.name);
+        const strip = o => { const x = view(cl, o); delete x.status; for (const k of ['uid', 'resourceVersion', 'generation', 'creationTimestamp', 'ownerReferences', 'managedFields']) delete x.metadata[k]; if (x.metadata.annotations) { for (const k of Object.keys(x.metadata.annotations)) if (k.startsWith('deployment.kubernetes.io/')) delete x.metadata.annotations[k]; if (!Object.keys(x.metadata.annotations).length) delete x.metadata.annotations; } return x; };
+        const want = clone(d); delete want.__file; want.metadata = { ...(want.metadata || {}), namespace: dns || undefined };
+        if (!CLUSTER_SCOPED.has(want.kind)) want.metadata.namespace = dns;
+        const overlay = (l, w) => { if (Array.isArray(w)) return Array.isArray(l) && l.length === w.length ? w.map((x, i) => overlay(l[i], x)) : w; if (w && typeof w === 'object') { const o = l && typeof l === 'object' && !Array.isArray(l) ? { ...l } : {}; for (const [k, v] of Object.entries(w)) o[k] = overlay(o[k], v); return o; } return w; };
+        const merged = live ? { ...overlay(strip(live), Object.fromEntries(Object.entries(want).filter(([k]) => !['metadata', 'status', 'apiVersion', 'kind'].includes(k)))), metadata: { ...strip(live).metadata, labels: { ...(want.kind === 'Namespace' ? { 'kubernetes.io/metadata.name': want.metadata.name } : {}), ...(want.metadata.labels || {}) }, ...(want.metadata.annotations ? { annotations: want.metadata.annotations } : {}) } } : want;
+        const before = live ? toYaml(strip(live)).split('\n') : [];
+        const after = toYaml(live ? merged : { ...want, metadata: { ...want.metadata } }).split('\n');
+        if (before.join('\n') === after.join('\n')) continue;
+        const file = `${d.apiVersion.replace('/', '.')}.${d.kind}.${dns || ''}.${d.metadata.name}`.replace('..', '.');
+        lines.push(`diff -u -N /tmp/LIVE-${suffix(9)}/${file} /tmp/MERGED-${suffix(9)}/${file}`, `--- /tmp/LIVE/${file}\t${new Date(uni.time * 1000).toISOString()}`, `+++ /tmp/MERGED/${file}\t${new Date(uni.time * 1000).toISOString()}`);
+        lines.push(...lineDiff(before, after));
+      }
+      if (lines.length) out(...lines.map(l => l.startsWith('+') && !l.startsWith('+++') ? C.green(l) : l.startsWith('-') && !l.startsWith('---') ? C.red(l) : l));
+      emit({ diff: true, changed: lines.length > 0 });
+      return lines.length ? 1 : 0;
     }
   }
   return c.fail(`error: unknown command "${verb}" for "kubectl"\n\nDid you mean this?\n\t${['get', 'apply', 'describe', 'logs', 'exec'].find(x => x[0] === verb[0]) || 'get'}`, 1);
 }, { pkg: 'kubectl' });
+
+// a minimal unified diff: one hunk with three lines of context around each change
+function lineDiff(a, b) {
+  const n = a.length, m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) { ops.push([' ', a[i]]); i++; j++; }
+    else if (i < n && (j === m || dp[i + 1][j] >= dp[i][j + 1])) { ops.push(['-', a[i]]); i++; }
+    else { ops.push(['+', b[j]]); j++; }
+  }
+  const keep = ops.map((o, k) => o[0] !== ' ' || ops.slice(Math.max(0, k - 3), k + 4).some(x => x[0] !== ' '));
+  const out = [`@@ -1,${n} +1,${m} @@`];
+  let gap = false;
+  ops.forEach((o, k) => { if (keep[k]) { if (gap && out.length > 1) out.push(' ...'); gap = false; out.push(o[0] + o[1]); } else gap = true; });
+  return out;
+}
 
 function podMem(cl, p) {
   const rt = cl.rt.get(p.metadata.uid);
   return (rt?.containers || []).reduce((s, c) => s + (c.ctr?.h ? [...c.ctr.h.procs.values()].reduce((q, pr) => q + (pr.mem || 0), 0) : 0), 0);
 }
 
-function createCmd(c, a, pos, cl, ns, emit) {
+function createCmd(c, a, pos, cl, ns, emit, conn) {
   const [what, ...rest] = pos;
   const out = (...l) => c.print(...l);
   const dry = a.val('--dry-run');
   const finish = obj => {
     if (dry) { if (a.output === 'json') out(...JSON.stringify(obj, null, 2).split('\n')); else out(...toYaml(obj).split('\n')); return 0; }
-    if (cl.get(obj.kind, obj.metadata.namespace || ns, obj.metadata.name)) return c.fail(`error: failed to create ${obj.kind.toLowerCase()}: ${PLURAL[obj.kind]} "${obj.metadata.name}" already exists`, 1);
+    if (cl.get(obj.kind, obj.metadata.namespace || ns, obj.metadata.name)) return c.fail(`error: failed to create ${obj.kind.toLowerCase()}: ${pluralOf(cl, obj.kind)} "${obj.metadata.name}" already exists`, 1);
     const r = cl.apply(obj, { ns });
     if (r.error) return c.fail(r.error, 1);
     out(`${resName(r.obj)} created`);
@@ -941,8 +1146,51 @@ function createCmd(c, a, pos, cl, ns, emit) {
       if (rules.some(r => !r)) return c.fail('error: rule format is host/path=service:port[,tls=secretname]', 1);
       return finish({ apiVersion: 'networking.k8s.io/v1', kind: 'Ingress', metadata: { name, namespace: dry ? undefined : ns }, spec: { ingressClassName: a.val('--class') || 'nginx', rules } });
     }
+    case 'serviceaccount': case 'sa': return finish({ apiVersion: 'v1', kind: 'ServiceAccount', metadata: { name: rest[0], namespace: dry ? undefined : ns } });
+    case 'role': case 'clusterrole': {
+      const name = rest[0];
+      const verbs = a.all('--verb').flatMap(v => v.split(',')).filter(Boolean);
+      const res = a.all('--resource').flatMap(v => v.split(',')).filter(Boolean);
+      if (!name) return c.fail('error: exactly one NAME is required, got 0', 1);
+      if (!verbs.length) return c.fail('error: at least one verb must be specified', 1);
+      if (!res.length) return c.fail('error: at least one resource must be specified', 1);
+      const groups = new Map();
+      for (const r of res) {
+        const pr = parseResource(cl, r);
+        if (!pr) return c.fail(`error: the server doesn't have a resource type "${r.split('/')[0]}"`, 1);
+        const g = pr.group === '*' ? '*' : pr.group;
+        groups.set(g, [...(groups.get(g) || []), pr.resource]);
+      }
+      const names = a.all('--resource-name').flatMap(v => v.split(',')).filter(Boolean);
+      const rules = [...groups].map(([g, rs]) => ({ apiGroups: [g], resources: rs, verbs, ...(names.length ? { resourceNames: names } : {}) }));
+      return finish({ apiVersion: 'rbac.authorization.k8s.io/v1', kind: what === 'role' ? 'Role' : 'ClusterRole', metadata: { name, ...(what === 'role' && !dry ? { namespace: ns } : {}) }, rules });
+    }
+    case 'rolebinding': case 'clusterrolebinding': {
+      const name = rest[0];
+      const role = a.val('--role'), crole = a.val('--clusterrole');
+      if (!name) return c.fail('error: exactly one NAME is required, got 0', 1);
+      if (!role && !crole) return c.fail('error: exactly one of clusterrole or role must be specified', 1);
+      if (what === 'clusterrolebinding' && role) return c.fail('error: unknown flag: --role', 1);
+      const subjects = [
+        ...a.all('--user').map(u => ({ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: u })),
+        ...a.all('--group').map(g => ({ apiGroup: 'rbac.authorization.k8s.io', kind: 'Group', name: g })),
+        ...a.all('--serviceaccount').map(x => { const [sns, sn] = x.split(':'); return { kind: 'ServiceAccount', name: sn, namespace: sns }; }),
+      ];
+      if (a.all('--serviceaccount').some(x => !x.includes(':'))) return c.fail('error: serviceaccount must be <namespace>:<name>', 1);
+      return finish({ apiVersion: 'rbac.authorization.k8s.io/v1', kind: what === 'rolebinding' ? 'RoleBinding' : 'ClusterRoleBinding', metadata: { name, ...(what === 'rolebinding' && !dry ? { namespace: ns } : {}) }, roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: role ? 'Role' : 'ClusterRole', name: role || crole }, subjects });
+    }
+    case 'token': {
+      const sa = rest[0];
+      if (!sa) return c.fail('error: requires a service account name', 1);
+      if (!cl.get('ServiceAccount', ns, sa)) return c.fail(`error: failed to create token: serviceaccounts "${sa}" not found`, 1);
+      const dur = a.val('--duration') || '1h';
+      const secs = parseInt(dur, 10) * ({ s: 1, m: 60, h: 3600 }[dur.slice(-1)] || 1);
+      out(issueToken(cl, ns, sa, { seconds: secs }));
+      emit({ kind: 'ServiceAccount', name: sa, token: true });
+      return 0;
+    }
   }
-  return c.fail(`error: unknown command "${what}" for "kubectl create"\n\nAvailable Commands:\n  configmap  deployment  ingress  job  namespace  secret  service`, 1);
+  return c.fail(`error: unknown command "${what}" for "kubectl create"\n\nAvailable Commands:\n  clusterrole  clusterrolebinding  configmap  deployment  ingress  job  namespace  role  rolebinding  secret  service  serviceaccount  token`, 1);
 }
 
 function rolloutCmd(c, a, pos, cl, ns, emit) {
@@ -951,7 +1199,7 @@ function rolloutCmd(c, a, pos, cl, ns, emit) {
   if (tg.error) return c.fail(tg.error, 1);
   const t = tg.list[0];
   const o = cl.get(t.kind, ns, t.name);
-  if (!o) return c.fail(`Error from server (NotFound): ${PLURAL[t.kind]} "${t.name}" not found`, 1);
+  if (!o) return c.fail(`Error from server (NotFound): ${pluralOf(cl, t.kind)} "${t.name}" not found`, 1);
   const out = (...l) => c.print(...l);
   const rss = () => cl.list('ReplicaSet', ns).filter(r => r.metadata.ownerReferences?.some(x => x.uid === o.metadata.uid)).sort((x, y) => Number(x.metadata.annotations['deployment.kubernetes.io/revision']) - Number(y.metadata.annotations['deployment.kubernetes.io/revision']));
   switch (sub) {
@@ -1011,7 +1259,14 @@ function configCmd(c, a, pos) {
   const { path, cfg, error } = kubeconfig(c);
   if (error) return c.fail(error, 1);
   const out = (...l) => c.print(...l);
-  if (!cfg && sub !== 'view') return c.fail(`error: current-context is not set`, 1);
+  if (!cfg && sub !== 'view' && !String(sub).startsWith('set-')) return c.fail(`error: current-context is not set`, 1);
+  const cfgOr = cfg || { apiVersion: 'v1', kind: 'Config', clusters: [], contexts: [], users: [], 'current-context': '' };
+  if (!cfg && String(sub).startsWith('set-')) { c.host.ensureParents?.(path, c.user); }
+  return configSub(c, a, sub, rest, path, cfgOr);
+}
+
+function configSub(c, a, sub, rest, path, cfg) {
+  const out = (...l) => c.print(...l);
   switch (sub) {
     case 'current-context': out(cfg['current-context']); return 0;
     case 'get-contexts': out(...table(['CURRENT', 'NAME', 'CLUSTER', 'AUTHINFO', 'NAMESPACE'], (cfg.contexts || []).map(x => [x.name === cfg['current-context'] ? '*' : '', x.name, x.context?.cluster, x.context?.user, x.context?.namespace || '']))); return 0;
@@ -1021,14 +1276,39 @@ function configCmd(c, a, pos) {
       c.uni.emit({ type: 'kubectl', host: c.host.name, verb: 'config', sub: 'use-context', context: rest[0] });
       return 0;
     }
+    case 'set-credentials': {
+      const name = rest[0];
+      if (!name) return c.fail('error: you must specify a non-empty user name', 1);
+      cfg.users = cfg.users || [];
+      let u = cfg.users.find(x => x.name === name);
+      if (!u) { u = { name, user: {} }; cfg.users.push(u); }
+      if (a.raw.token !== undefined) u.user = { token: a.raw.token };
+      saveKubeconfig(c, path, cfg);
+      out(`User "${name}" set.`);
+      c.uni.emit({ type: 'kubectl', host: c.host.name, verb: 'config', sub: 'set-credentials', user: name });
+      return 0;
+    }
+    case 'set-cluster': {
+      const name = rest[0];
+      cfg.clusters = cfg.clusters || [];
+      let cc = cfg.clusters.find(x => x.name === name);
+      if (!cc) { cc = { name, cluster: {} }; cfg.clusters.push(cc); }
+      if (a.raw.server) cc.cluster.server = a.raw.server;
+      saveKubeconfig(c, path, cfg);
+      out(`Cluster "${name}" set.`);
+      return 0;
+    }
     case 'set-context': {
       const name = a.has('--current') ? cfg['current-context'] : rest[0];
-      const ctx = (cfg.contexts || []).find(x => x.name === name);
+      let ctx = (cfg.contexts || []).find(x => x.name === name);
+      if (!ctx && !a.has('--current') && name) { ctx = { name, context: {} }; cfg.contexts = [...(cfg.contexts || []), ctx]; }
       if (!ctx) return c.fail(`error: no context exists with the name: "${name}"`, 1);
+      if (a.raw.cluster) ctx.context.cluster = a.raw.cluster;
+      if (a.raw.user) ctx.context.user = a.raw.user;
       const nsv = a.raw['--namespace'] ?? a.raw.namespace ?? a.val('--namespace');
       if (nsv) ctx.context.namespace = nsv;
       saveKubeconfig(c, path, cfg);
-      out(`Context "${name}" modified.`);
+      out(`Context "${name}" ${a.raw.cluster || a.raw.user ? 'created' : 'modified'}.`);
       c.uni.emit({ type: 'kubectl', host: c.host.name, verb: 'config', sub: 'set-context', namespace: nsv });
       return 0;
     }

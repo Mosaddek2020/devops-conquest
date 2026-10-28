@@ -5,6 +5,9 @@ import { createCluster, parseSelector } from './k8s.js';
 import { kubeconfigText } from './kubectl.js';
 import { installPkg } from './packages.js';
 import { parseYaml } from '../git/yaml.js';
+import { installArgo } from './argocd.js';
+import { installKyverno } from './kyverno.js';
+import { createVault, installEso } from './vault.js';
 
 registerLabExtension({
   helpers: (uni, sh, H) => ({
@@ -26,6 +29,12 @@ registerLabExtension({
       if (settle) uni.advance(settle);
       return cl;
     },
+    // Argo CD in the cluster, plus its CLI on the laptop
+    argocd(name = 'lumen', opts = {}) { const a = installArgo(uni.clusters.get(name), opts); installPkg(uni.host('laptop'), uni, 'argocd', []); return a; },
+    kyverno(name = 'lumen') { installPkg(uni.host('laptop'), uni, 'kyverno', []); return installKyverno(uni.clusters.get(name)); },
+    // a Vault server on the network (dev mode: root token printed in the lab brief)
+    vault(opts = {}) { const v = createVault(uni, opts); installPkg(uni.host('laptop'), uni, 'vault', []); return v; },
+    eso(name = 'lumen') { return installEso(uni.clusters.get(name)); },
     kload(name, key, millicores) { uni.clusters.get(name).load[key] = millicores; },
     settle(seconds = 30) { uni.advance(seconds); },
   }),
@@ -36,6 +45,7 @@ registerLabExtension({
       kobj: (name, kind, ns, n) => cl(name)?.get(kind, ns, n) || null,
       kpods: (name, ns, sel = null) => cl(name)?.list('Pod', ns, typeof sel === 'string' ? parseSelector(sel) : sel).filter(p => !p.metadata.deletionTimestamp) || [],
       kready: (name, ns, sel) => { const c = cl(name); return c ? c.list('Pod', ns, typeof sel === 'string' ? parseSelector(sel) : sel).filter(p => c.podReady(p)) : []; },
+      kapp: (name, app) => cl(name)?.get('Application', cl(name)?.argocd?.ns || 'argocd', app) || null,
       kran: (re) => api.events('kubectl').some(e => re.test(`${e.verb} ${e.args || ''}`)),
     };
   },
