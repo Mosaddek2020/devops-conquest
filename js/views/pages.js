@@ -54,6 +54,11 @@ export function renderPath() {
     h('h2', {}, 'Git Conquest'),
     h('p', {}, 'Every realm here assumes you can commit, branch, open pull requests and untangle a messy history. New to git or GitHub? Git Conquest teaches exactly that, from zero, in the same hands-on style.'),
     h('a', { class: 'btn btn-primary', href: 'https://mosaddek2020.github.io/git-conquest/', target: '_blank', rel: 'noopener' }, 'Open Git Conquest ↗')));
+  page.append(h('aside', { class: 'course-link' },
+    h('p', { class: 'eyebrow' }, 'Sibling course'),
+    h('h2', {}, 'Engineer Conquest'),
+    h('p', {}, 'New to software engineering itself? Engineer Conquest teaches the foundations this course builds on: engineering habits, HTTP and HTTPS, frontend and backend, multi-tenant SaaS, and software development in the era of AI.'),
+    h('a', { class: 'btn btn-primary', href: 'https://mosaddek2020.github.io/engineer-conquest/', target: '_blank', rel: 'noopener' }, 'Open Engineer Conquest ↗')));
   return page;
 }
 

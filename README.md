@@ -4,6 +4,8 @@ A self-paced, mastery-based DevOps course for the age of AI: zero to hero, hands
 simulated Linux world that runs entirely in the browser (no backend, progress in
 localStorage).
 
+Companion courses: [Git Conquest](https://mosaddek2020.github.io/git-conquest/) and [Engineer Conquest](https://mosaddek2020.github.io/engineer-conquest/) (intern onboarding and software development in the era of AI).
+
 Each lesson teaches through several lenses (story, mental model, commands, analogy, team
 practice, traps), then a hands-on lab graded from the simulator's real state, then a quiz.
 You unlock the next lesson by passing it.
